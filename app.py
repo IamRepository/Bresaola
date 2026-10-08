@@ -13,6 +13,7 @@ import streamlit as st
 from bresaola import __version__, calc, db, storage
 from bresaola.blends import BLENDS
 from bresaola.demo import seed_demo
+from bresaola.stages import stage_states
 
 st.set_page_config(page_title="Bresaola Tracker", page_icon="🥩", layout="wide")
 
@@ -131,7 +132,38 @@ st.caption(f"{p['blend']} · EcoCure {'yes' if p['ecocure'] else 'no'} · "
            f"{p['green_weight_g']:.0f} g green weight · created {p['created_at'][:10]}"
            + (f" · **closed {p['closed_at'][:10]}**" if closed else ""))
 
-tabs = st.tabs(["1 · Spice mix", "2 · Cure", "3 · Dry", "4 · Equalise", "Photos", "Close & history"])
+# --- stage track: tabs styled as a sequence of pills showing where the batch is ---
+ICON = {"done": ":material/check_circle:", "current": ":material/radio_button_checked:",
+        "todo": ":material/radio_button_unchecked:", "optional": ":material/do_not_disturb_on:"}
+STAGES = ["Spice mix", "Cure", "Dry", "Equalise"]
+states = stage_states(p)
+labels_ = [f"{ICON[s]} {i}. {name}" for i, (s, name) in enumerate(zip(states, STAGES), 1)]
+labels_ += [":material/photo_library: Photos", ":material/history: Close & history"]
+open_tab = next((l for l, s in zip(labels_, states) if s == "current"), labels_[5] if closed else labels_[2])
+
+T = 'div[data-testid="stTab"]'
+st.markdown(f"""
+<style>
+div[role="tablist"] {{ gap: .45rem; flex-wrap: wrap; padding: .25rem 0 .9rem; border: none; box-shadow: none; }}
+div[role="tablist"]::after, .react-aria-SelectionIndicator {{ display: none !important; }}
+{T} {{ height: auto; padding: .45rem 1rem; margin: 0; border-radius: 999px;
+      border: 1px solid #d9d4d0; background: #fff; color: #4a4542; box-shadow: none; }}
+{T}::after, {T}::before {{ display: none; }}
+{T} p {{ font-size: .95rem; font-weight: 500; color: inherit; }}
+{T}:hover {{ border-color: #7a2320; color: #7a2320; }}
+{T}[aria-selected="true"] {{ background: #7a2320; border-color: #7a2320; color: #fff; }}
+{T}[data-key="4"] {{ margin-left: auto; }}
+{T}[data-key="4"], {T}[data-key="5"] {{ border-style: dashed; }}
+""" + "".join(
+    f'{T}[data-key="{i}"]:not([aria-selected="true"]) {css}\n'
+    for i, s in enumerate(states)
+    for css in [{"done": "{ border-color:#9db39f; color:#3e5a44; background:#f3f7f3; }",
+                 "current": "{ border-color:#7a2320; border-width:2px; color:#7a2320; }",
+                 "todo": "{ color:#8a8480; }",
+                 "optional": "{ color:#8a8480; border-style:dashed; }"}[s]]
+) + "</style>", unsafe_allow_html=True)
+
+tabs = st.tabs(labels_, default=open_tab, key=f"stages{pid}")
 
 # --------------------------------------------------------------------------- #
 # 1. spice mix
