@@ -272,6 +272,70 @@ def readings(con, pid: int) -> list[tuple[date, float]]:
     return [(date.fromisoformat(r["day"]), r["gross_g"]) for r in rows]
 
 
+def change_blend(con, pid: int, blend: str) -> None:
+    """Pick a different blend before the mix is locked: new snapshot, plan rewritten."""
+    p = project(con, pid)
+    if p["spice_locked_at"]:
+        raise Locked("Spice mix is locked; unlock it first")
+    con.execute("UPDATE project SET blend=? WHERE id=?", (blend, pid))
+    _write_plan(con, pid, p["green_weight_g"], bool(p["ecocure"]), calc.blend_rates(blend))
+    log(con, pid, "blend_changed", blend)
+
+
+def set_equalise(con, pid: int, *, start=None, end=None, end_gross_g=None, note=None) -> None:
+    _require_open(con, pid)
+    con.execute("""UPDATE project SET equalise_start=?, equalise_end=?, equalise_end_gross_g=?,
+                   equalise_note=? WHERE id=?""", (_iso(start), _iso(end), end_gross_g, note, pid))
+
+
+def end_drying(con, pid: int, day) -> None:
+    _require_open(con, pid)
+    con.execute("UPDATE project SET dry_end=? WHERE id=?", (_iso(day), pid))
+
+
+def delete_reading(con, pid: int, day) -> None:
+    _require_open(con, pid)
+    con.execute("DELETE FROM reading WHERE project_id=? AND day=?", (pid, _iso(day)))
+
+
+def reading_rows(con, pid: int) -> list[sqlite3.Row]:
+    return con.execute("SELECT * FROM reading WHERE project_id=? ORDER BY day", (pid,)).fetchall()
+
+
+def add_photo(con, pid: int, path: str, taken_at, caption: str | None = None,
+              reading_id: int | None = None) -> int:
+    _require_open(con, pid)
+    return con.execute("""INSERT INTO photo (project_id, reading_id, taken_at, path, caption)
+                          VALUES (?,?,?,?,?)""",
+                       (pid, reading_id, _iso(taken_at), path, caption)).lastrowid
+
+
+def photos(con, pid: int) -> list[sqlite3.Row]:
+    return con.execute("SELECT * FROM photo WHERE project_id=? ORDER BY taken_at, id",
+                       (pid,)).fetchall()
+
+
+def chambers(con) -> list[sqlite3.Row]:
+    return con.execute("SELECT * FROM chamber ORDER BY name").fetchall()
+
+
+def chamber_readings(con, chamber_id: int, start=None, end=None) -> list[sqlite3.Row]:
+    q, args = "SELECT * FROM chamber_reading WHERE chamber_id=?", [chamber_id]
+    if start:
+        q += " AND ts >= ?"; args.append(_iso(start))
+    if end:
+        q += " AND ts <= ?"; args.append(_iso(end) + "T23:59:59")
+    return con.execute(q + " ORDER BY ts", args).fetchall()
+
+
+def projects(con) -> list[sqlite3.Row]:
+    return con.execute("SELECT * FROM project ORDER BY status, created_at DESC").fetchall()
+
+
+def events(con, pid: int) -> list[sqlite3.Row]:
+    return con.execute("SELECT * FROM project_event WHERE project_id=? ORDER BY id", (pid,)).fetchall()
+
+
 def close_project(con, pid: int, final_notes: str = "") -> None:
     con.execute("UPDATE project SET status='closed', closed_at=?, final_notes=? WHERE id=?",
                 (_now(), final_notes, pid))
