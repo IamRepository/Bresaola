@@ -239,50 +239,87 @@ with tabs[0]:
 # --------------------------------------------------------------------------- #
 
 with tabs[1]:
-    with st.form(f"cure{pid}"):
-        c1, c2, c3 = st.columns(3)
-        shape = c1.radio("Shape", ["tubular", "flat"], horizontal=True,
-                         index=0 if (p["shape"] or "tubular") == "tubular" else 1,
-                         help="Tubular: eye of round, tenderloin. Flat: brisket.")
-        thick = c2.number_input("Narrowest dimension across the thickest part (cm)", min_value=0.5,
-                                value=float(p["thickness_cm"] or 8.0), step=0.5)
-        length = c3.number_input("Length (cm)", min_value=0.0, value=float(p["length_cm"] or 0.0), step=0.5,
-                                 help="Optional. Used to check the dimensions against the weight.")
-        est = st.checkbox("Thickness is an estimate", value=bool(p["thickness_estimated"]))
-        c4, c5 = st.columns(2)
-        start = c4.date_input("Cure start", value=d(p["cure_start"]) or db.today(), format="DD/MM/YYYY")
-        has_end = c5.checkbox("Taken out of the bag", value=bool(p["cure_end_actual"]))
-        end_act = c5.date_input("Actual end", value=d(p["cure_end_actual"]) or db.today(),
-                                format="DD/MM/YYYY", disabled=False)
-        method = st.text_input("Method", value=p["cure_method"] or
-                               "Equilibrium dry cure, vacuum-sealed, fridge, flipped and massaged daily")
-        note = st.text_area("Notes and exceptions", value=p["cure_note"] or "", height=80)
-        if st.form_submit_button("Save cure", type="primary", disabled=closed):
-            act(db.set_cure, pid, shape=shape, thickness_cm=thick, length_cm=length or None,
-                thickness_estimated=est, start=start, end_actual=end_act if has_end else None,
-                method=method, note=note or None, success="Cure saved")
+    k = f"cure{pid}_"
+    # live values: what is on screen now (saved values until you change something)
+    shape = st.session_state.get(k + "shape") or p["shape"] or "tubular"
+    thick = st.session_state.get(k + "thick", p["thickness_cm"] or 8.0)
+    start = st.session_state.get(k + "start", d(p["cure_start"])) or d(p["cure_start"]) or db.today()
+    end_act = st.session_state.get(k + "end", d(p["cure_end_actual"]))
 
-    mins = calc.cure_days_minimum(thick, shape)
     days = calc.cure_days(thick, shape)
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Calculator minimum", f"{mins:.1f} days")
-    k2.metric("Cure time (+20 %)", f"{days} days")
-    k3.metric("Planned end", fmt_date(p["cure_end_planned"]) if p["cure_start"] else "–")
-    if p["cure_end_actual"] and p["cure_start"]:
-        actual_days = (d(p["cure_end_actual"]) - d(p["cure_start"])).days
-        k4.metric("Actual", f"{actual_days} days", delta=f"{actual_days - days:+d} vs plan", delta_color="off")
-    elif p["cure_start"]:
-        left = (d(p["cure_end_planned"]) - db.today()).days
-        k4.metric("Remaining", f"{max(left, 0)} days")
+    mins = calc.cure_days_minimum(thick, shape)
+    planned = calc.cure_end_date(start, thick, shape) if start else None
 
-    if shape == "tubular" and length:
-        implied_g = 1.05 * 3.1416 * (thick / 2) ** 2 * length
-        ratio = implied_g / p["green_weight_g"]
-        if not 0.6 < ratio < 1.6:
-            st.warning(f"Dimensions don't match the weight: a {thick:g} × {length:g} cm cylinder weighs about "
-                       f"{implied_g:.0f} g, the piece weighs {p['green_weight_g']:.0f} g. Check the measurement.")
-    st.caption("Formula: genuineideas.com equilibrium brine calculator, 1.25 × (thickness in inches)² days "
-               "for flat, half for tubular; +20 % to cure to the centre; rounded up. Fridge 1–3 °C.")
+    # --- the answer first -------------------------------------------------- #
+    with st.container(border=True):
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Cure time", f"{days} days",
+                  help=f"Calculator minimum {mins:.1f} days + 20 %, rounded up.")
+        m2.metric("Planned end", f"{planned:%d %b %Y}" if planned else "–")
+        if end_act:
+            actual_days = (end_act - start).days
+            m3.metric("Taken out", f"{end_act:%d %b %Y}")
+            m4.metric("Actual cure", f"{actual_days} days",
+                      delta=f"{actual_days - days:+d} days vs plan", delta_color="off")
+        else:
+            left = (planned - db.today()).days if planned else 0
+            m3.metric("Status", "Still curing")
+            m4.metric("Days left", f"{max(left, 0)}" if left >= 0 else f"{-left} over",
+                      help="Longer is safe with the equilibrium method; it only costs time.")
+
+    # --- inputs ------------------------------------------------------------ #
+    left_col, right_col = st.columns(2, gap="medium")
+    with left_col.container(border=True):
+        st.markdown("**The piece**")
+        st.segmented_control("Shape", ["tubular", "flat"], default=p["shape"] or "tubular",
+                             key=k + "shape", disabled=closed,
+                             help="Tubular: eye of round, tenderloin. Flat: brisket.")
+        c1, c2 = st.columns(2)
+        c1.number_input("Thickness (cm)", min_value=0.5, step=0.5, format="%.1f",
+                        value=float(p["thickness_cm"] or 8.0), key=k + "thick", disabled=closed,
+                        help="Narrowest dimension across the thickest part. This sets the cure time.")
+        length = c2.number_input("Length (cm)", min_value=0.0, step=0.5, format="%.1f",
+                                 value=float(p["length_cm"]) if p["length_cm"] else None,
+                                 placeholder="optional", key=k + "len", disabled=closed,
+                                 help="Used only to check the measurements against the weight.")
+        est = st.checkbox("Thickness is an estimate", value=bool(p["thickness_estimated"]),
+                          key=k + "est", disabled=closed)
+        if shape == "tubular" and length:
+            implied_g = 1.05 * 3.1416 * (thick / 2) ** 2 * length
+            if not 0.6 < implied_g / p["green_weight_g"] < 1.6:
+                st.warning(f"A {thick:g} × {length:g} cm piece would weigh about {implied_g:.0f} g, "
+                           f"but this one weighs {p['green_weight_g']:.0f} g. Check the measurements.")
+
+    with right_col.container(border=True):
+        st.markdown("**Dates**")
+        st.date_input("Into the bag", value=d(p["cure_start"]) or db.today(), format="DD/MM/YYYY",
+                      key=k + "start", disabled=closed)
+        st.date_input("Taken out of the bag", value=d(p["cure_end_actual"]), format="DD/MM/YYYY",
+                      key=k + "end", disabled=closed, help="Leave empty while the meat is still curing.")
+
+    with st.container(border=True):
+        method = st.text_input("Method", key=k + "method", disabled=closed,
+                               value=p["cure_method"] or
+                               "Equilibrium dry cure, vacuum-sealed, fridge, flipped and massaged daily")
+        note = st.text_area("Notes and exceptions", value=p["cure_note"] or "", height=90,
+                            key=k + "note", disabled=closed,
+                            placeholder="e.g. missed a flip on day 12, lots of liquid on day 3")
+
+    saved = (p["shape"], p["thickness_cm"], p["length_cm"], bool(p["thickness_estimated"]),
+             p["cure_start"], p["cure_end_actual"], p["cure_method"], p["cure_note"])
+    now = (shape, thick, length or None, est, start.isoformat() if start else None,
+           end_act.isoformat() if end_act else None, method, note or None)
+    dirty = now != saved
+    b1, b2 = st.columns([1, 5], vertical_alignment="center")
+    if b1.button("Save cure", type="primary", disabled=closed or not dirty, key=k + "save"):
+        act(db.set_cure, pid, shape=shape, thickness_cm=thick, length_cm=length or None,
+            thickness_estimated=est, start=start, end_actual=end_act,
+            method=method, note=note or None, success="Cure saved")
+    if dirty and not closed:
+        b2.caption("Unsaved changes")
+
+    st.caption("Cure time uses the genuineideas.com equilibrium calculator: 1.25 × (thickness in inches)² "
+               "days for flat, half for tubular, +20 % to reach the centre. Assumes a fridge at 1–3 °C.")
 
 # --------------------------------------------------------------------------- #
 # 3. dry

@@ -29,7 +29,7 @@ def test_renders_demo_project_in_test_mode(app):
     m = metrics(app)
     assert m["Total planned (g)"] == "126.3"
     assert m["Total actual (g)"] == "120.1"
-    assert m["Cure time (+20 %)"] == "34 days"
+    assert m["Cure time"] == "34 days"
     assert m["Target weight"] == "1365 g"
     assert m["Latest weight"] == "1963 g"
 
@@ -103,3 +103,17 @@ def test_delete_project_needs_exact_name(app, tmp_path):
     assert not app.exception, app.exception
     # demo is not re-seeded after deleting it
     assert any("Create a project" in i.value for i in app.info)
+
+
+def test_cure_tab_live_recalc_and_save(app, tmp_path):
+    # demo is saved, so nothing to save yet
+    save = lambda: next(b for b in app.button if b.label == "Save cure")
+    assert save().disabled
+    next(n for n in app.number_input if n.label == "Thickness (cm)").set_value(10.0)
+    app.run()
+    assert {m.label: m.value for m in app.metric}["Cure time"] == "12 days"   # recalculated live
+    assert not save().disabled
+    save().click()
+    app.run()
+    assert not app.exception, app.exception
+    assert db.project(db.connect(tmp_path / storage.DB_NAME), 1)["thickness_cm"] == 10.0
