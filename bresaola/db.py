@@ -1,0 +1,295 @@
+"""SQLite storage. One file for data; photos live in a folder next to it.
+
+Design rules (confirmed 2026-10-08):
+- Blend rates are copied onto the project at creation (snapshot).
+- The spice mix is locked by "Done"; Unlock is explicit and logged.
+- Temperature/RH readings belong to a chamber; projects link to a chamber.
+- Weigh-ins are gross weights (wrap + net); tare is stored on the project.
+"""
+from __future__ import annotations
+
+import sqlite3
+from datetime import date, datetime
+from pathlib import Path
+
+from . import calc
+
+SCHEMA = """
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS chamber (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    sensor      TEXT,
+    notes       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS chamber_reading (
+    id          INTEGER PRIMARY KEY,
+    chamber_id  INTEGER NOT NULL REFERENCES chamber(id) ON DELETE CASCADE,
+    ts          TEXT NOT NULL,              -- ISO datetime
+    temp_c      REAL,
+    rh_pct      REAL,
+    source      TEXT NOT NULL DEFAULT 'manual',  -- manual | tapo_export | tapo_api
+    UNIQUE (chamber_id, ts, source)
+);
+
+CREATE TABLE IF NOT EXISTS project (
+    id                  INTEGER PRIMARY KEY,
+    name                TEXT NOT NULL UNIQUE,
+    status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','closed')),
+    created_at          TEXT NOT NULL,
+    closed_at           TEXT,
+    -- stage 1: spice mix
+    blend               TEXT NOT NULL,
+    ecocure             INTEGER NOT NULL,           -- 0/1
+    green_weight_g      REAL NOT NULL,
+    spice_locked_at     TEXT,
+    -- stage 2: cure
+    shape               TEXT CHECK (shape IN ('flat','tubular')),
+    thickness_cm        REAL,
+    length_cm           REAL,
+    thickness_estimated INTEGER NOT NULL DEFAULT 0,
+    cure_method         TEXT,
+    cure_start          TEXT,
+    cure_end_planned    TEXT,
+    cure_end_actual     TEXT,
+    cure_note           TEXT,
+    -- stage 3: dry
+    chamber_id          INTEGER REFERENCES chamber(id),
+    dry_start           TEXT,
+    dry_start_gross_g   REAL,
+    tare_g              REAL NOT NULL DEFAULT 0,
+    tare_estimated      INTEGER NOT NULL DEFAULT 1,
+    target_loss_pct     REAL NOT NULL DEFAULT 35,
+    dry_end             TEXT,
+    dry_note            TEXT,
+    -- stage 4: equalise (optional)
+    equalise_start      TEXT,
+    equalise_end        TEXT,
+    equalise_end_gross_g REAL,
+    equalise_note       TEXT,
+    -- close
+    final_notes         TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ingredient_line (
+    id          INTEGER PRIMARY KEY,
+    project_id  INTEGER NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    position    INTEGER NOT NULL,
+    name        TEXT NOT NULL,
+    unit        TEXT NOT NULL CHECK (unit IN ('pct','per_kg')),
+    rate        REAL NOT NULL,
+    planned     REAL NOT NULL,
+    actual      REAL,
+    note        TEXT,
+    UNIQUE (project_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS reading (
+    id          INTEGER PRIMARY KEY,
+    project_id  INTEGER NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    day         TEXT NOT NULL,              -- ISO date
+    gross_g     REAL NOT NULL,
+    note        TEXT,
+    UNIQUE (project_id, day)
+);
+
+CREATE TABLE IF NOT EXISTS photo (
+    id          INTEGER PRIMARY KEY,
+    project_id  INTEGER NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    reading_id  INTEGER REFERENCES reading(id) ON DELETE SET NULL,
+    taken_at    TEXT NOT NULL,
+    path        TEXT NOT NULL,              -- relative to the photo folder
+    caption     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS project_event (
+    id          INTEGER PRIMARY KEY,
+    project_id  INTEGER NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    ts          TEXT NOT NULL,
+    kind        TEXT NOT NULL,              -- spice_locked, spice_unlocked, target_changed, ...
+    detail      TEXT
+);
+"""
+
+
+class Locked(Exception):
+    """Raised when editing something that has been locked or closed."""
+
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _iso(d) -> str | None:
+    return d.isoformat() if isinstance(d, (date, datetime)) else d
+
+
+def connect(path: str | Path) -> sqlite3.Connection:
+    con = sqlite3.connect(str(path))
+    con.row_factory = sqlite3.Row
+    con.executescript(SCHEMA)
+    return con
+
+
+def log(con, project_id: int, kind: str, detail: str = "") -> None:
+    con.execute("INSERT INTO project_event (project_id, ts, kind, detail) VALUES (?,?,?,?)",
+                (project_id, _now(), kind, detail))
+
+
+# ----------------------------- chamber ------------------------------------- #
+
+def get_or_create_chamber(con, name: str, sensor: str | None = None) -> int:
+    row = con.execute("SELECT id FROM chamber WHERE name=?", (name,)).fetchone()
+    if row:
+        return row["id"]
+    return con.execute("INSERT INTO chamber (name, sensor) VALUES (?,?)", (name, sensor)).lastrowid
+
+
+def add_chamber_reading(con, chamber_id: int, ts, temp_c=None, rh_pct=None, source="manual"):
+    con.execute("""INSERT OR REPLACE INTO chamber_reading (chamber_id, ts, temp_c, rh_pct, source)
+                   VALUES (?,?,?,?,?)""", (chamber_id, _iso(ts), temp_c, rh_pct, source))
+
+
+# ----------------------------- project ------------------------------------- #
+
+def project(con, project_id: int) -> sqlite3.Row:
+    row = con.execute("SELECT * FROM project WHERE id=?", (project_id,)).fetchone()
+    if row is None:
+        raise KeyError(project_id)
+    return row
+
+
+def _require_open(con, project_id: int):
+    if project(con, project_id)["status"] == "closed":
+        raise Locked("Project is closed")
+
+
+def create_project(con, name: str, blend: str, ecocure: bool, green_weight_g: float) -> int:
+    """New project with a snapshot of the blend's rates and planned amounts."""
+    rates = calc.blend_rates(blend)
+    pid = con.execute("""INSERT INTO project (name, created_at, blend, ecocure, green_weight_g)
+                         VALUES (?,?,?,?,?)""",
+                      (name, _now(), blend, int(ecocure), green_weight_g)).lastrowid
+    _write_plan(con, pid, green_weight_g, ecocure, rates)
+    log(con, pid, "created", f"{blend}, {green_weight_g} g, EcoCure {'yes' if ecocure else 'no'}")
+    return pid
+
+
+def _stored_rates(con, pid) -> list[tuple[str, str, float]]:
+    rows = con.execute("""SELECT name, unit, rate FROM ingredient_line
+                          WHERE project_id=? ORDER BY position""", (pid,)).fetchall()
+    # EcoCure and salt are derived, not part of the blend snapshot
+    return [(r["name"], r["unit"], r["rate"]) for r in rows
+            if r["name"] != "EcoCure #2" and not r["name"].startswith("Kosher salt")]
+
+
+def _write_plan(con, pid, weight, ecocure, rates):
+    """(Re)write planned amounts; actuals reset to the plan."""
+    con.execute("DELETE FROM ingredient_line WHERE project_id=?", (pid,))
+    for i, l in enumerate(calc.spice_plan(weight, ecocure, rates)):
+        con.execute("""INSERT INTO ingredient_line (project_id, position, name, unit, rate, planned, actual)
+                       VALUES (?,?,?,?,?,?,?)""", (pid, i, l.name, l.unit, l.rate, l.planned, l.planned))
+
+
+def update_spice_inputs(con, pid: int, green_weight_g: float | None = None,
+                        ecocure: bool | None = None) -> None:
+    """Change weight or EcoCure before the mix is locked. Recalculates the plan."""
+    p = project(con, pid)
+    if p["spice_locked_at"]:
+        raise Locked("Spice mix is locked; unlock it first")
+    w = p["green_weight_g"] if green_weight_g is None else green_weight_g
+    e = bool(p["ecocure"]) if ecocure is None else ecocure
+    rates = _stored_rates(con, pid)
+    con.execute("UPDATE project SET green_weight_g=?, ecocure=? WHERE id=?", (w, int(e), pid))
+    _write_plan(con, pid, w, e, rates)
+
+
+def set_actual(con, pid: int, position: int, actual: float | None, note: str | None = None) -> None:
+    if project(con, pid)["spice_locked_at"]:
+        raise Locked("Spice mix is locked; unlock it first")
+    con.execute("""UPDATE ingredient_line SET actual=?, note=COALESCE(?, note)
+                   WHERE project_id=? AND position=?""", (actual, note, pid, position))
+
+
+def lock_spice(con, pid: int) -> None:
+    con.execute("UPDATE project SET spice_locked_at=? WHERE id=?", (_now(), pid))
+    log(con, pid, "spice_locked")
+
+
+def unlock_spice(con, pid: int, reason: str) -> None:
+    _require_open(con, pid)
+    con.execute("UPDATE project SET spice_locked_at=NULL WHERE id=?", (pid,))
+    log(con, pid, "spice_unlocked", reason)
+
+
+def ingredient_lines(con, pid: int) -> list[sqlite3.Row]:
+    return con.execute("SELECT * FROM ingredient_line WHERE project_id=? ORDER BY position",
+                       (pid,)).fetchall()
+
+
+def set_cure(con, pid: int, *, shape: str, thickness_cm: float, start, length_cm=None,
+             thickness_estimated=False, method=None, end_actual=None, note=None) -> None:
+    _require_open(con, pid)
+    planned = calc.cure_end_date(date.fromisoformat(_iso(start)), thickness_cm, shape)
+    con.execute("""UPDATE project SET shape=?, thickness_cm=?, length_cm=?, thickness_estimated=?,
+                   cure_method=?, cure_start=?, cure_end_planned=?, cure_end_actual=?, cure_note=?
+                   WHERE id=?""",
+                (shape, thickness_cm, length_cm, int(thickness_estimated), method,
+                 _iso(start), planned.isoformat(), _iso(end_actual), note, pid))
+
+
+def set_drying(con, pid: int, *, start, start_gross_g: float, chamber_id: int | None = None,
+               tare_g: float = 0.0, tare_estimated: bool = True,
+               target_loss_pct: float = 35.0, note=None) -> None:
+    _require_open(con, pid)
+    con.execute("""UPDATE project SET dry_start=?, dry_start_gross_g=?, chamber_id=?, tare_g=?,
+                   tare_estimated=?, target_loss_pct=?, dry_note=? WHERE id=?""",
+                (_iso(start), start_gross_g, chamber_id, tare_g, int(tare_estimated),
+                 target_loss_pct, note, pid))
+    con.execute("INSERT OR REPLACE INTO reading (project_id, day, gross_g, note) VALUES (?,?,?,?)",
+                (pid, _iso(start), start_gross_g, "Start of drying"))
+
+
+def change_target(con, pid: int, new_pct: float, reason: str = "") -> None:
+    _require_open(con, pid)
+    old = project(con, pid)["target_loss_pct"]
+    con.execute("UPDATE project SET target_loss_pct=? WHERE id=?", (new_pct, pid))
+    log(con, pid, "target_changed", f"{old} % -> {new_pct} % {reason}".strip())
+
+
+def add_reading(con, pid: int, day, gross_g: float, note: str | None = None) -> int:
+    _require_open(con, pid)
+    return con.execute("""INSERT INTO reading (project_id, day, gross_g, note) VALUES (?,?,?,?)
+                          ON CONFLICT(project_id, day) DO UPDATE SET gross_g=excluded.gross_g,
+                          note=excluded.note""", (pid, _iso(day), gross_g, note)).lastrowid
+
+
+def readings(con, pid: int) -> list[tuple[date, float]]:
+    rows = con.execute("SELECT day, gross_g FROM reading WHERE project_id=? ORDER BY day",
+                       (pid,)).fetchall()
+    return [(date.fromisoformat(r["day"]), r["gross_g"]) for r in rows]
+
+
+def close_project(con, pid: int, final_notes: str = "") -> None:
+    con.execute("UPDATE project SET status='closed', closed_at=?, final_notes=? WHERE id=?",
+                (_now(), final_notes, pid))
+    log(con, pid, "closed")
+
+
+def drying_status(con, pid: int) -> dict:
+    """Everything the drying screen needs, in one place."""
+    p = project(con, pid)
+    rs = readings(con, pid)
+    start, tare, pct = p["dry_start_gross_g"], p["tare_g"], p["target_loss_pct"]
+    latest_day, latest = rs[-1]
+    return {
+        "start_gross_g": start,
+        "target_gross_g": calc.target_gross_weight(start, pct, tare),
+        "latest_day": latest_day,
+        "latest_gross_g": latest,
+        "loss_pct": calc.loss_pct(start, latest, tare),
+        "progress": calc.progress_to_target(start, latest, pct, tare),
+        "eta": calc.drying_eta(rs, start, pct, tare),
+    }
