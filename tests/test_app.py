@@ -87,3 +87,19 @@ def test_restore_rejects_other_zips(tmp_path, monkeypatch):
         z.writestr("hello.txt", "x")
     with pytest.raises(ValueError):
         storage.restore_backup(buf.getvalue())
+
+
+def test_delete_project_needs_exact_name(app, tmp_path):
+    btn = lambda: next(b for b in app.button if b.label == "Delete project permanently")
+    assert btn().disabled
+    next(t for t in app.text_input if t.label.startswith("Type the project name")).input("wrong")
+    app.run()
+    assert btn().disabled
+    next(t for t in app.text_input if t.label.startswith("Type the project name")).input(
+        "Palermo Spicy 2026 (demo)")
+    app.run()
+    btn().click()
+    app.run()
+    assert not app.exception, app.exception
+    # demo is not re-seeded after deleting it
+    assert any("Create a project" in i.value for i in app.info)

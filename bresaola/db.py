@@ -8,9 +8,11 @@ Design rules (confirmed 2026-10-08):
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from . import calc
 
@@ -118,8 +120,20 @@ class Locked(Exception):
     """Raised when editing something that has been locked or closed."""
 
 
+TZ = ZoneInfo(os.environ.get("BRESAOLA_TZ", "Europe/Berlin"))
+
+
+def now_local() -> datetime:
+    """Wall-clock time where the meat is, not where the server is (Streamlit Cloud runs on UTC)."""
+    return datetime.now(TZ).replace(tzinfo=None)
+
+
+def today() -> date:
+    return now_local().date()
+
+
 def _now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return now_local().isoformat(timespec="seconds")
 
 
 def _iso(d) -> str | None:
@@ -334,6 +348,15 @@ def projects(con) -> list[sqlite3.Row]:
 
 def events(con, pid: int) -> list[sqlite3.Row]:
     return con.execute("SELECT * FROM project_event WHERE project_id=? ORDER BY id", (pid,)).fetchall()
+
+
+def delete_project(con, pid: int) -> list[str]:
+    """Delete a project and all its rows. Returns photo paths so the caller can remove files.
+    Chambers and their readings are shared and stay."""
+    paths = [r["path"] for r in photos(con, pid)]
+    con.execute("PRAGMA foreign_keys = ON")
+    con.execute("DELETE FROM project WHERE id=?", (pid,))
+    return paths
 
 
 def close_project(con, pid: int, final_notes: str = "") -> None:

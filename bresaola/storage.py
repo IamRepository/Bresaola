@@ -41,6 +41,10 @@ def save_photo(project_id: int, filename: str, data: bytes) -> str:
     return rel.as_posix()
 
 
+def delete_project_photos(project_id: int) -> None:
+    shutil.rmtree(data_dir() / PHOTO_DIR / str(project_id), ignore_errors=True)
+
+
 def photo_file(rel: str) -> Path:
     return data_dir() / rel
 

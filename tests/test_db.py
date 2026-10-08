@@ -90,3 +90,25 @@ def test_seed_palermo_spicy(tmp_path):
     assert s["start_gross_g"] == 2100 and s["target_gross_g"] == pytest.approx(1365)
     assert s["latest_gross_g"] == 1963 and s["latest_day"] == date(2026, 10, 8)
     assert len(db.readings(con, pid)) == 5
+
+
+def test_timestamps_use_local_timezone(monkeypatch):
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    local = db.now_local()
+    berlin = datetime.now(ZoneInfo("Europe/Berlin")).replace(tzinfo=None)
+    assert abs((local - berlin).total_seconds()) < 5
+    assert db.TZ.key == "Europe/Berlin"
+
+
+def test_delete_project_removes_rows_but_keeps_chamber(con):
+    ch = db.get_or_create_chamber(con, "Fridge drawer")
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    db.set_drying(con, pid, start=date(2026, 9, 20), start_gross_g=2100, chamber_id=ch)
+    db.add_photo(con, pid, "photos/1/x.jpg", "2026-10-08")
+    db.add_chamber_reading(con, ch, "2026-10-08T20:00", 3.0, 80)
+    assert db.delete_project(con, pid) == ["photos/1/x.jpg"]
+    for t in ("project", "ingredient_line", "reading", "photo", "project_event"):
+        assert con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] == 0, t
+    assert con.execute("SELECT COUNT(*) FROM chamber_reading").fetchone()[0] == 1

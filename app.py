@@ -22,8 +22,9 @@ st.set_page_config(page_title="Bresaola Tracker", page_icon="🥩", layout="wide
 # --------------------------------------------------------------------------- #
 
 def get_con():
+    fresh = not storage.db_path().exists()
     con = db.connect(storage.db_path())
-    if storage.is_test_mode() and not db.projects(con):
+    if fresh and storage.is_test_mode():   # demo only in a brand-new test database
         seed_demo(con)
     return con
 
@@ -91,18 +92,20 @@ with st.sidebar:
     st.divider()
     st.subheader("Backup")
     st.download_button("Download backup", storage.make_backup(),
-                       file_name=f"bresaola-backup-{date.today().isoformat()}.zip",
+                       file_name=f"bresaola-backup-{db.today().isoformat()}.zip",
                        mime="application/zip", use_container_width=True)
-    up = st.file_uploader("Restore from backup", type="zip", key="restore")
-    if up is not None and st.button("Replace all data with this backup", type="secondary"):
-        con.close()
-        try:
-            storage.restore_backup(up.getvalue())
-            st.session_state.pop("pid", None)
-            st.session_state["flash"] = "Backup restored"
-        except ValueError as e:
-            st.error(str(e))
-        st.rerun()
+    with st.popover("Restore backup", use_container_width=True):
+        st.caption("Replaces **all** projects and photos with the contents of the backup.")
+        up = st.file_uploader("Backup file (.zip)", type="zip", key="restore")
+        if st.button("Replace all data", type="primary", disabled=up is None, use_container_width=True):
+            con.close()
+            try:
+                storage.restore_backup(up.getvalue())
+                st.session_state.pop("pid", None)
+                st.session_state["flash"] = "Backup restored"
+            except ValueError as e:
+                st.session_state["flash_error"] = str(e)
+            st.rerun()
 
 # --------------------------------------------------------------------------- #
 # header
@@ -114,6 +117,8 @@ if storage.is_test_mode():
 
 if msg := st.session_state.pop("flash", None):
     st.success(msg)
+if err := st.session_state.pop("flash_error", None):
+    st.error(err)
 
 if pid is None:
     st.info("Create a project in the sidebar to start.")
@@ -213,9 +218,9 @@ with tabs[1]:
                                  help="Optional. Used to check the dimensions against the weight.")
         est = st.checkbox("Thickness is an estimate", value=bool(p["thickness_estimated"]))
         c4, c5 = st.columns(2)
-        start = c4.date_input("Cure start", value=d(p["cure_start"]) or date.today(), format="DD/MM/YYYY")
+        start = c4.date_input("Cure start", value=d(p["cure_start"]) or db.today(), format="DD/MM/YYYY")
         has_end = c5.checkbox("Taken out of the bag", value=bool(p["cure_end_actual"]))
-        end_act = c5.date_input("Actual end", value=d(p["cure_end_actual"]) or date.today(),
+        end_act = c5.date_input("Actual end", value=d(p["cure_end_actual"]) or db.today(),
                                 format="DD/MM/YYYY", disabled=False)
         method = st.text_input("Method", value=p["cure_method"] or
                                "Equilibrium dry cure, vacuum-sealed, fridge, flipped and massaged daily")
@@ -235,7 +240,7 @@ with tabs[1]:
         actual_days = (d(p["cure_end_actual"]) - d(p["cure_start"])).days
         k4.metric("Actual", f"{actual_days} days", delta=f"{actual_days - days:+d} vs plan", delta_color="off")
     elif p["cure_start"]:
-        left = (d(p["cure_end_planned"]) - date.today()).days
+        left = (d(p["cure_end_planned"]) - db.today()).days
         k4.metric("Remaining", f"{max(left, 0)} days")
 
     if shape == "tubular" and length:
@@ -256,7 +261,7 @@ with tabs[2]:
         st.subheader("Start drying")
         with st.form(f"drystart{pid}"):
             c1, c2, c3 = st.columns(3)
-            ds = c1.date_input("Drying start", value=d(p["cure_end_actual"]) or date.today(), format="DD/MM/YYYY")
+            ds = c1.date_input("Drying start", value=d(p["cure_end_actual"]) or db.today(), format="DD/MM/YYYY")
             sg = c2.number_input("Start weight incl. wrap + net (g)", min_value=1.0,
                                  value=float(p["green_weight_g"]), step=1.0)
             tp = c3.number_input("Target loss (%)", min_value=1.0, max_value=70.0, value=35.0, step=1.0)
@@ -311,7 +316,7 @@ with tabs[2]:
             st.subheader("Add weigh-in")
             with st.form(f"reading{pid}", clear_on_submit=True):
                 c1, c2 = st.columns(2)
-                rd = c1.date_input("Date", value=date.today(), format="DD/MM/YYYY")
+                rd = c1.date_input("Date", value=db.today(), format="DD/MM/YYYY")
                 rw = c2.number_input("Weight incl. wrap + net (g)", min_value=1.0,
                                      value=float(s["latest_gross_g"]), step=1.0)
                 c3, c4 = st.columns(2)
@@ -325,7 +330,7 @@ with tabs[2]:
                             rid = db.add_reading(con, pid, rd, rw, rn or None)
                             if (rt is not None or rh is not None) and p["chamber_id"]:
                                 db.add_chamber_reading(con, p["chamber_id"],
-                                                       datetime.combine(rd, datetime.now().time()).isoformat(timespec="minutes"),
+                                                       datetime.combine(rd, db.now_local().time()).isoformat(timespec="minutes"),
                                                        rt, rh)
                             if ph is not None:
                                 rel = storage.save_photo(pid, ph.name, ph.getvalue())
@@ -360,7 +365,7 @@ with tabs[2]:
             st.caption(f"Packaging weight {p['tare_g']:g} g"
                        + (" (estimate)" if p["tare_estimated"] else "")
                        + (f" · {p['dry_note']}" if p["dry_note"] else ""))
-            de = st.date_input("Drying ended", value=d(p["dry_end"]) or date.today(),
+            de = st.date_input("Drying ended", value=d(p["dry_end"]) or db.today(),
                                format="DD/MM/YYYY", key=f"de{pid}")
             if st.button("Mark drying finished", disabled=closed):
                 act(db.end_drying, pid, de, success="Drying finished")
@@ -375,16 +380,16 @@ with tabs[3]:
     with st.form(f"eq{pid}"):
         c1, c2, c3 = st.columns(3)
         use_start = c1.checkbox("Started", value=bool(p["equalise_start"]))
-        es = c1.date_input("Start", value=d(p["equalise_start"]) or d(p["dry_end"]) or date.today(), format="DD/MM/YYYY")
+        es = c1.date_input("Start", value=d(p["equalise_start"]) or d(p["dry_end"]) or db.today(), format="DD/MM/YYYY")
         use_end = c2.checkbox("Finished", value=bool(p["equalise_end"]))
-        ee = c2.date_input("End", value=d(p["equalise_end"]) or date.today(), format="DD/MM/YYYY")
+        ee = c2.date_input("End", value=d(p["equalise_end"]) or db.today(), format="DD/MM/YYYY")
         ew = c3.number_input("Weight at end (g)", min_value=0.0, value=float(p["equalise_end_gross_g"] or 0), step=1.0)
         en = st.text_area("Notes", value=p["equalise_note"] or "", height=80)
         if st.form_submit_button("Save", type="primary", disabled=closed):
             act(db.set_equalise, pid, start=es if use_start else None, end=ee if use_end else None,
                 end_gross_g=ew or None, note=en or None, success="Saved")
     if p["equalise_start"]:
-        end = d(p["equalise_end"]) or date.today()
+        end = d(p["equalise_end"]) or db.today()
         st.metric("Days equalising", (end - d(p["equalise_start"])).days)
 
 # --------------------------------------------------------------------------- #
@@ -395,7 +400,7 @@ with tabs[4]:
     with st.form(f"photo{pid}", clear_on_submit=True):
         c1, c2, c3 = st.columns([3, 1, 2])
         files = c1.file_uploader("Add photos", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
-        pd_ = c2.date_input("Taken on", value=date.today(), format="DD/MM/YYYY")
+        pd_ = c2.date_input("Taken on", value=db.today(), format="DD/MM/YYYY")
         cap = c3.text_input("Caption")
         if st.form_submit_button("Upload", disabled=closed) and files:
             with con:
@@ -441,3 +446,16 @@ with tabs[5]:
     st.dataframe(pd.DataFrame([{"When": e["ts"].replace("T", " "), "What": e["kind"].replace("_", " "),
                                 "Detail": e["detail"] or ""} for e in ev]),
                  hide_index=True, use_container_width=True)
+
+    st.divider()
+    with st.expander("Delete project"):
+        st.warning("Deletes this project, its weigh-ins and photos for good. The drying chamber and its "
+                   "temperature/humidity readings stay. Download a backup first if you might want it back.")
+        confirm = st.text_input(f"Type the project name to confirm: **{p['name']}**", key=f"del{pid}")
+        if st.button("Delete project permanently", disabled=confirm.strip() != p["name"]):
+            with con:
+                db.delete_project(con, pid)
+            storage.delete_project_photos(pid)
+            st.session_state.pop("pid", None)
+            st.session_state["flash"] = f"Deleted {p['name']}"
+            st.rerun()
