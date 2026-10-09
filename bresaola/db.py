@@ -41,12 +41,14 @@ CREATE TABLE IF NOT EXISTS project (
     name                TEXT NOT NULL UNIQUE,
     status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','closed')),
     created_at          TEXT NOT NULL,
+    start_date          TEXT,                       -- day the meat was trimmed and spiced
     closed_at           TEXT,
     -- stage 1: spice mix
     blend               TEXT NOT NULL,
     ecocure             INTEGER NOT NULL,           -- 0/1
     green_weight_g      REAL NOT NULL,
     spice_locked_at     TEXT,
+    spice_note          TEXT,
     -- stage 2: cure
     shape               TEXT CHECK (shape IN ('flat','tubular')),
     thickness_cm        REAL,
@@ -140,10 +142,21 @@ def _iso(d) -> str | None:
     return d.isoformat() if isinstance(d, (date, datetime)) else d
 
 
+# columns added after v0.2.0; older databases (and backups) get them on open
+MIGRATIONS = {"project": [("start_date", "TEXT"), ("spice_note", "TEXT")]}
+
+
 def connect(path: str | Path) -> sqlite3.Connection:
     con = sqlite3.connect(str(path))
     con.row_factory = sqlite3.Row
     con.executescript(SCHEMA)
+    for table, cols in MIGRATIONS.items():
+        have = {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
+        for col, typ in cols:
+            if col not in have:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+    con.execute("UPDATE project SET start_date = substr(created_at, 1, 10) WHERE start_date IS NULL")
+    con.commit()
     return con
 
 
@@ -180,12 +193,14 @@ def _require_open(con, project_id: int):
         raise Locked("Project is closed")
 
 
-def create_project(con, name: str, blend: str, ecocure: bool, green_weight_g: float) -> int:
+def create_project(con, name: str, blend: str, ecocure: bool, green_weight_g: float,
+                   start_date=None) -> int:
     """New project with a snapshot of the blend's rates and planned amounts."""
     rates = calc.blend_rates(blend)
-    pid = con.execute("""INSERT INTO project (name, created_at, blend, ecocure, green_weight_g)
-                         VALUES (?,?,?,?,?)""",
-                      (name, _now(), blend, int(ecocure), green_weight_g)).lastrowid
+    pid = con.execute("""INSERT INTO project (name, created_at, start_date, blend, ecocure, green_weight_g)
+                         VALUES (?,?,?,?,?,?)""",
+                      (name, _now(), _iso(start_date or today()), blend, int(ecocure),
+                       green_weight_g)).lastrowid
     _write_plan(con, pid, green_weight_g, ecocure, rates)
     log(con, pid, "created", f"{blend}, {green_weight_g} g, EcoCure {'yes' if ecocure else 'no'}")
     return pid
@@ -225,6 +240,18 @@ def set_actual(con, pid: int, position: int, actual: float | None, note: str | N
         raise Locked("Spice mix is locked; unlock it first")
     con.execute("""UPDATE ingredient_line SET actual=?, note=COALESCE(?, note)
                    WHERE project_id=? AND position=?""", (actual, note, pid, position))
+
+
+def set_spice_note(con, pid: int, note: str | None) -> None:
+    if project(con, pid)["spice_locked_at"]:
+        raise Locked("Spice mix is locked; unlock it first")
+    con.execute("UPDATE project SET spice_note=? WHERE id=?", (note or None, pid))
+
+
+def display_name(p) -> str:
+    """'26/08/15 Palermo Spicy' – start date as YY/MM/DD, then the name."""
+    d = p["start_date"] or p["created_at"][:10]
+    return f"{date.fromisoformat(d):%y/%m/%d} {p['name']}"
 
 
 def lock_spice(con, pid: int) -> None:
@@ -343,7 +370,7 @@ def chamber_readings(con, chamber_id: int, start=None, end=None) -> list[sqlite3
 
 
 def projects(con) -> list[sqlite3.Row]:
-    return con.execute("SELECT * FROM project ORDER BY status, created_at DESC").fetchall()
+    return con.execute("SELECT * FROM project ORDER BY status, start_date DESC, id DESC").fetchall()
 
 
 def events(con, pid: int) -> list[sqlite3.Row]:

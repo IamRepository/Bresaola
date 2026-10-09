@@ -112,3 +112,18 @@ def test_delete_project_removes_rows_but_keeps_chamber(con):
     for t in ("project", "ingredient_line", "reading", "photo", "project_event"):
         assert con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] == 0, t
     assert con.execute("SELECT COUNT(*) FROM chamber_reading").fetchone()[0] == 1
+
+
+def test_old_database_gets_new_columns(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.sqlite"
+    raw = sqlite3.connect(path)
+    raw.executescript(db.SCHEMA.replace("    start_date          TEXT,                       -- day the meat was trimmed and spiced\n", "")
+                               .replace("    spice_note          TEXT,\n", ""))
+    raw.execute("INSERT INTO project (name, created_at, blend, ecocure, green_weight_g) "
+                "VALUES ('Old', '2026-09-01T10:00:00', 'Classic Italian', 0, 1500)")
+    raw.commit(); raw.close()
+    con = db.connect(path)
+    p = db.project(con, 1)
+    assert p["start_date"] == "2026-09-01" and p["spice_note"] is None
+    assert db.display_name(p) == "26/09/01 Old"

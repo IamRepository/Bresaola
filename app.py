@@ -65,15 +65,15 @@ con = get_con()
 
 with st.sidebar:
     st.title("Bresaola Tracker")
-    st.caption(f"v{__version__}")
+    st.caption(f"v{__version__}  \nCredit to Eric Pousson from 2 Guys & A Cooler")
 
     projs = db.projects(con)
-    labels = {p["id"]: f"{p['name']}{'  (closed)' if p['status'] == 'closed' else ''}" for p in projs}
+    labels = {p["id"]: db.display_name(p) + ("  (closed)" if p["status"] == "closed" else "") for p in projs}
     if projs:
         default = st.session_state.get("pid", projs[0]["id"])
         ids = list(labels)
-        pid = st.radio("Projects", ids, index=ids.index(default) if default in ids else 0,
-                       format_func=labels.get)
+        pid = st.selectbox("Project", ids, index=ids.index(default) if default in ids else 0,
+                           format_func=labels.get)
         st.session_state["pid"] = pid
     else:
         pid = None
@@ -81,6 +81,8 @@ with st.sidebar:
     with st.expander("New project", expanded=not projs):
         with st.form("new_project", clear_on_submit=True):
             name = st.text_input("Name", placeholder="e.g. Valtellina Nov 2026")
+            start_d = st.date_input("Start date", value=db.today(), format="DD/MM/YYYY",
+                                    help="The day the meat is trimmed and spiced")
             weight = st.number_input("Meat weight [g]", min_value=1.0, value=2000.0, step=1.0, format="%.0f",
                                      help="Raw meat after trimming")
             if st.form_submit_button("Create project", type="primary"):
@@ -89,7 +91,7 @@ with st.sidebar:
                 else:
                     try:
                         with con:
-                            new = db.create_project(con, name.strip(), next(iter(BLENDS)), False, weight)
+                            new = db.create_project(con, name.strip(), next(iter(BLENDS)), False, weight, start_d)
                         st.session_state["pid"] = new
                         st.rerun()
                     except Exception as e:  # unique name etc.
@@ -133,9 +135,9 @@ if pid is None:
 
 p = db.project(con, pid)
 closed = p["status"] == "closed"
-st.header(p["name"])
+st.header(db.display_name(p))
 facts = [p["blend"], f"{p['green_weight_g']:.0f} g raw meat after trimming",
-         "EcoCure #2" if p["ecocure"] else "no EcoCure", f"started {d(p['created_at'][:10]):%d %b %Y}"]
+         "EcoCure #2" if p["ecocure"] else "no EcoCure", f"started {d(p['start_date']):%d %b %Y}"]
 if closed:
     facts.append(f"closed {d(p['closed_at'][:10]):%d %b %Y}")
 st.caption(",  ".join(facts))
@@ -202,7 +204,7 @@ with tabs[0]:
             st.caption("Locked. Unlock below to change blend, weight or EcoCure.")
 
     # --- tables: weighed [g] and counted [pcs] ---------------------------- #
-    centre = dict(alignment="center")
+    centre = dict(alignment="left")   # headings cannot be centred, so everything aligns left
     def table(rows, unit_rate, unit_qty, key):
         df = pd.DataFrame([{
             "Ingredient": l["name"],
@@ -211,7 +213,7 @@ with tabs[0]:
             f"Actual [{unit_qty}]": None if l["actual"] is None else float(l["actual"]),
             "Note": l["note"] or "",
         } for l in rows])
-        fmt = "%.2f" if unit_qty == "g" else "%d"
+        fmt = "%.1f" if unit_qty == "g" else "%d"
         return st.data_editor(
             df, hide_index=True, width="stretch", disabled=locked, key=key,
             column_config={
@@ -250,27 +252,32 @@ with tabs[0]:
         cols = st.columns(6 if p["ecocure"] else 5)
         cols[0].metric("Total planned [g]", f"{plan_g:.1f}")
         cols[1].metric("Total actual [g]", f"{act_g:.1f}", delta=f"{act_g - plan_g:+.1f} g", delta_color="off")
-        cols[2].metric("Salt [% of meat]", f"{act_mix.salt_pct:.2f}",
-                       delta=f"{act_mix.salt_pct - plan_mix.salt_pct:+.2f} vs plan", delta_color="off",
+        cols[2].metric("Salt [% of meat]", f"{act_mix.salt_pct:.1f}",
+                       delta=f"{act_mix.salt_pct - plan_mix.salt_pct:+.1f} vs plan", delta_color="off",
                        help="Kosher salt plus the salt inside EcoCure #2 (half its weight), "
-                            "divided by the meat weight. Plan is 3.00.")
+                            "divided by the meat weight. Plan is 3.0.")
         i = 3
         if p["ecocure"]:
-            cols[i].metric("EcoCure [% of meat]", f"{act_mix.ecocure_pct:.2f}",
-                           delta=f"{act_mix.ecocure_pct - plan_mix.ecocure_pct:+.2f} vs plan", delta_color="off")
+            cols[i].metric("EcoCure [% of meat]", f"{act_mix.ecocure_pct:.1f}",
+                           delta=f"{act_mix.ecocure_pct - plan_mix.ecocure_pct:+.1f} vs plan", delta_color="off")
             i += 1
-        cols[i].metric("Sugar [% of meat]", f"{act_mix.sugar_pct:.2f}")
-        cols[i + 1].metric("Spices [% of meat]", f"{act_mix.seasoning_pct:.2f}",
+        cols[i].metric("Sugar [% of meat]", f"{act_mix.sugar_pct:.1f}")
+        cols[i + 1].metric("Spices [% of meat]", f"{act_mix.seasoning_pct:.1f}",
                            help="All weighed ingredients except salt, EcoCure and sugar.")
         off = calc.off_plan([(l["name"], l["planned"], a) for l, a, _ in acts])
         if off:
             st.caption("More than 10 % off plan: " +
                        ", ".join(f"{n} ({dv*100:+.0f} %)" for n, dv in off))
 
+    spice_note = st.text_area("Notes", value=p["spice_note"] or "", height=90, key=f"sn{pid}{ver}",
+                              disabled=locked,
+                              placeholder="e.g. used fresh rosemary, ground the pepper myself, mixed by hand")
+
     # --- actions ------------------------------------------------------------ #
     def save_actuals():
         for l, a, note in acts:
             db.set_actual(con, pid, l["position"], a, note)
+        db.set_spice_note(con, pid, spice_note.strip())
 
     if closed:
         pass

@@ -17,7 +17,7 @@ READINGS = [(date(2026, 9, 26), 2057), (date(2026, 9, 30), 2026),
 
 def seed_demo(con) -> int:
     with con:
-        pid = db.create_project(con, NAME, "Spicy Calabrian", False, 2088)
+        pid = db.create_project(con, NAME, "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 15))
         for line in db.ingredient_lines(con, pid):
             if line["name"] in ACTUALS:
                 a, note = ACTUALS[line["name"]]

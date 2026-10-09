@@ -25,7 +25,7 @@ def metrics(at):
 
 def test_renders_demo_project_in_test_mode(app):
     assert any("Test mode" in w.value for w in app.warning)
-    assert app.header[0].value == "Palermo Spicy 2026 (demo)"
+    assert app.header[0].value == "26/08/15 Palermo Spicy 2026 (demo)"
     m = metrics(app)
     assert m["Total planned [g]"] == "126.3"
     assert m["Total actual [g]"] == "120.1"
@@ -49,7 +49,8 @@ def test_create_new_project(app):
     next(b for b in app.sidebar.button if b.label == "Create project").click()
     app.run()
     assert not app.exception, app.exception
-    assert app.header[0].value == "Test batch"
+    assert app.header[0].value.endswith(" Test batch")
+    assert app.header[0].value[:8] == db.today().strftime("%y/%m/%d")
     assert metrics(app)["Total planned [g]"] == "46.5"   # Classic Italian, 1000 g
 
 
@@ -117,3 +118,25 @@ def test_cure_tab_live_recalc_and_save(app, tmp_path):
     app.run()
     assert not app.exception, app.exception
     assert db.project(db.connect(tmp_path / storage.DB_NAME), 1)["thickness_cm"] == 10.0
+
+
+def test_new_project_with_own_start_date(app, tmp_path):
+    from datetime import date
+    next(t for t in app.sidebar.text_input if t.label == "Name").input("Back-dated")
+    next(d for d in app.sidebar.date_input if d.label == "Start date").set_value(date(2026, 9, 1))
+    next(b for b in app.sidebar.button if b.label == "Create project").click()
+    app.run()
+    assert not app.exception, app.exception
+    assert app.header[0].value == "26/09/01 Back-dated"
+
+
+def test_spice_notes_saved(app, tmp_path):
+    next(t for t in app.text_input if t.label == "Reason (saved in history)").input("notes")
+    app.run()
+    next(b for b in app.button if b.label == "Unlock spice mix").click()
+    app.run()
+    next(t for t in app.text_area if t.label == "Notes").input("Mixed by hand")
+    next(b for b in app.button if b.label == "Save actual amounts").click()
+    app.run()
+    assert not app.exception, app.exception
+    assert db.project(db.connect(tmp_path / storage.DB_NAME), 1)["spice_note"] == "Mixed by hand"

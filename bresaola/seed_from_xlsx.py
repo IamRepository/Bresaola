@@ -38,7 +38,8 @@ def seed(xlsx_path: str, db_path: str) -> int:
     with con:
         weight = float(sp["C2"].value)
         ecocure = str(sp["C3"].value).strip().lower() == "yes"
-        pid = db.create_project(con, PROJECT_NAME, "Spicy Calabrian", ecocure, weight)
+        pid = db.create_project(con, PROJECT_NAME, "Spicy Calabrian", ecocure, weight,
+                                start_date=_d(cu["C2"].value))
 
         # actual amounts and notes
         for pos, row in enumerate(CALABRIAN_ROWS):
