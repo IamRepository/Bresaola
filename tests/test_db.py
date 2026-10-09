@@ -45,11 +45,23 @@ def test_lock_blocks_edits_and_unlock_is_logged(con):
     assert kinds == ["created", "spice_locked", "spice_unlocked"]
 
 
+def finished_project(con, name="A"):
+    pid = db.create_project(con, name, "Spicy Calabrian", False, 2088)
+    db.lock_spice(con, pid)
+    db.set_cure(con, pid, shape="tubular", thickness_cm=10, start=date(2026, 8, 1),
+                end_actual=date(2026, 8, 13))
+    db.lock_cure(con, pid)
+    db.set_drying(con, pid, start=date(2026, 8, 13), start_gross_g=2100)
+    db.add_reading(con, pid, date(2026, 8, 20), 2050)
+    db.lock_dry(con, pid, date(2026, 10, 1))
+    return pid
+
+
 def test_closed_project_is_read_only(con):
-    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    pid = finished_project(con)
     db.close_project(con, pid)
     with pytest.raises(db.Locked):
-        db.add_reading(con, pid, date(2026, 1, 1), 1000)
+        db.add_reading(con, pid, date(2026, 9, 1), 1000)
 
 
 def test_target_change_logged(con):
@@ -146,15 +158,16 @@ def test_cure_and_dry_locks(con):
     db.set_cure_note(con, pid, "still allowed")
     db.add_photo(con, pid, "photos/1/x.jpg", "2026-08-13", stage="cure")   # photos allowed too
     db.set_drying(con, pid, start=date(2026, 8, 13), start_gross_g=2100)
-    db.lock_dry(con, pid, date(2026, 11, 1))
-    for f in (lambda: db.add_reading(con, pid, date(2026, 11, 2), 1300),
+    db.add_reading(con, pid, date(2026, 8, 20), 2060)
+    db.lock_dry(con, pid, date(2026, 10, 1))
+    for f in (lambda: db.add_reading(con, pid, date(2026, 9, 2), 2000),
               lambda: db.change_target(con, pid, 30),
               lambda: db.delete_reading(con, pid, date(2026, 8, 13))):
         with pytest.raises(db.Locked):
             f()
     db.set_dry_note(con, pid, "fine")
     db.unlock_dry(con, pid, "one more weigh-in")
-    db.add_reading(con, pid, date(2026, 11, 2), 1300)
+    db.add_reading(con, pid, date(2026, 9, 2), 2000)
     kinds = [r["kind"] for r in db.events(con, pid)]
     assert kinds[-3:] == ["cure_locked", "dry_locked", "dry_unlocked"]
 
@@ -166,3 +179,63 @@ def test_rename(con):
     assert db.display_name(db.project(con, pid)) == "26/08/15 Palermo Spicy"
     with pytest.raises(ValueError):
         db.rename_project(con, pid, "  ")
+
+
+# ---------------- audit bugs ----------------
+
+def test_duplicate_names_are_refused_politely(con):
+    db.create_project(con, "Rome", "Classic Italian", False, 1326)
+    b = db.create_project(con, "Palermo", "Spicy Calabrian", False, 2088)
+    with pytest.raises(ValueError, match="already exists"):
+        db.create_project(con, "rome", "Classic Italian", False, 1000)   # case-insensitive
+    with pytest.raises(ValueError, match="already exists"):
+        db.rename_project(con, b, "Rome")
+    db.rename_project(con, b, "Palermo")          # renaming to its own name is fine
+
+
+def test_weigh_in_checks(con):
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    db.set_drying(con, pid, start=date(2026, 9, 20), start_gross_g=2100, tare_g=30)
+    db.add_reading(con, pid, date(2026, 9, 26), 2057)
+    with pytest.raises(ValueError, match="before drying started"):
+        db.add_reading(con, pid, date(2026, 9, 1), 2000)
+    with pytest.raises(ValueError, match="future"):
+        db.add_reading(con, pid, date(2099, 1, 1), 2000)
+    with pytest.raises(ValueError, match="packaging"):
+        db.add_reading(con, pid, date(2026, 9, 30), 25)
+    with pytest.raises(ValueError, match="Typo"):             # 196 instead of 1960
+        db.add_reading(con, pid, date(2026, 9, 30), 196)
+    with pytest.raises(ValueError, match="more than the start"):
+        db.add_reading(con, pid, date(2026, 9, 30), 2300)
+    db.add_reading(con, pid, date(2026, 9, 30), 2300, confirmed=True)   # user insists
+    assert db.readings(con, pid)[-1][1] == 2300
+
+
+def test_same_date_weigh_in_needs_confirm(con):
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    db.set_drying(con, pid, start=date(2026, 9, 20), start_gross_g=2100)
+    db.add_reading(con, pid, date(2026, 9, 26), 2057)
+    with pytest.raises(ValueError, match="already a weigh-in"):
+        db.add_reading(con, pid, date(2026, 9, 26), 2050)
+    db.add_reading(con, pid, date(2026, 9, 26), 2050, confirmed=True)
+    assert db.readings(con, pid)[-1] == (date(2026, 9, 26), 2050)
+
+
+def test_cure_end_before_start_refused(con):
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    with pytest.raises(ValueError, match="cannot be before"):
+        db.set_cure(con, pid, shape="tubular", thickness_cm=10, start=date(2026, 8, 15),
+                    end_actual=date(2026, 8, 1))
+
+
+def test_close_needs_all_steps_locked(con):
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    with pytest.raises(ValueError, match="lock the spice mix; lock the cure; lock drying"):
+        db.close_project(con, pid)
+    done = finished_project(con, "B")
+    db.set_equalise(con, done, start=date(2026, 10, 1))
+    with pytest.raises(ValueError, match="finish equalising"):
+        db.close_project(con, done)
+    db.set_equalise(con, done, start=date(2026, 10, 1), end=date(2026, 10, 20))
+    db.close_project(con, done)
+    assert db.project(con, done)["status"] == "closed"

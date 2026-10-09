@@ -214,9 +214,19 @@ def _require_open(con, project_id: int):
         raise Locked("Project is closed")
 
 
+def _check_name_free(con, name: str, except_id: int | None = None) -> None:
+    row = con.execute("SELECT id FROM project WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
+    if row and row["id"] != except_id:
+        raise ValueError(f"A project called '{name}' already exists. Pick another name.")
+
+
 def create_project(con, name: str, blend: str, ecocure: bool, green_weight_g: float,
                    start_date=None) -> int:
     """New project with a snapshot of the blend's rates and planned amounts."""
+    name = name.strip()
+    if not name:
+        raise ValueError("Give the project a name")
+    _check_name_free(con, name)
     rates = calc.blend_rates(blend)
     pid = con.execute("""INSERT INTO project (name, created_at, start_date, blend, ecocure, green_weight_g)
                          VALUES (?,?,?,?,?,?)""",
@@ -294,6 +304,8 @@ def ingredient_lines(con, pid: int) -> list[sqlite3.Row]:
 def set_cure(con, pid: int, *, shape: str, thickness_cm: float, start, length_cm=None,
              thickness_estimated=False, method=None, end_actual=None, note=None) -> None:
     _require_unlocked(con, pid, "cure")
+    if end_actual and date.fromisoformat(_iso(end_actual)) < date.fromisoformat(_iso(start)):
+        raise ValueError("'Taken out of the bag' cannot be before 'Into the bag'")
     planned = calc.cure_end_date(date.fromisoformat(_iso(start)), thickness_cm, shape)
     con.execute("""UPDATE project SET shape=?, thickness_cm=?, length_cm=?, thickness_estimated=?,
                    cure_method=?, cure_start=?, cure_end_planned=?, cure_end_actual=?, cure_note=?
@@ -345,6 +357,7 @@ def rename_project(con, pid: int, name: str) -> None:
     name = name.strip()
     if not name:
         raise ValueError("Name cannot be empty")
+    _check_name_free(con, name, except_id=pid)
     old = project(con, pid)["name"]
     con.execute("UPDATE project SET name=? WHERE id=?", (name, pid))
     log(con, pid, "renamed", f"{old} -> {name}")
@@ -369,11 +382,58 @@ def change_target(con, pid: int, new_pct: float, reason: str = "") -> None:
     log(con, pid, "target_changed", f"{old} % -> {new_pct} % {reason}".strip())
 
 
-def add_reading(con, pid: int, day, gross_g: float, note: str | None = None) -> int:
+def reading_problems(con, pid: int, day, gross_g: float) -> tuple[list[str], list[str]]:
+    """(errors, warnings) for a weigh-in. Errors block saving; warnings need a confirm."""
+    p = project(con, pid)
+    day = date.fromisoformat(_iso(day))
+    errors, warns = [], []
+    if not p["dry_start"]:
+        return ["Start drying first"], []
+    start, start_g, tare = date.fromisoformat(p["dry_start"]), p["dry_start_gross_g"], p["tare_g"] or 0
+    if day < start:
+        errors.append(f"The date is before drying started ({start:%d %b %Y})")
+    if day > today():
+        errors.append("The date is in the future")
+    if gross_g <= tare:
+        errors.append(f"The weight must be more than the packaging ({tare:g} g)")
+    if errors:
+        return errors, warns
+    if day == start:
+        errors.append("That is the start weight; change it under the drying start instead")
+        return errors, warns
+    same = con.execute("SELECT gross_g FROM reading WHERE project_id=? AND day=?",
+                       (pid, day.isoformat())).fetchone()
+    if same:
+        warns.append(f"There is already a weigh-in on {day:%d %b} ({same['gross_g']:.0f} g). "
+                     "Saving replaces it.")
+    if gross_g > start_g * 1.02:
+        warns.append(f"{gross_g:.0f} g is more than the start weight ({start_g:.0f} g).")
+    prev = con.execute("""SELECT day, gross_g FROM reading WHERE project_id=? AND day<?
+                          ORDER BY day DESC LIMIT 1""", (pid, day.isoformat())).fetchone()
+    if prev:
+        days = max((day - date.fromisoformat(prev["day"])).days, 1)
+        drop = (prev["gross_g"] - gross_g) / prev["gross_g"]
+        if drop > 0.02 * days + 0.03:          # far faster than any realistic drying
+            warns.append(f"{gross_g:.0f} g is {drop*100:.0f} % below the weigh-in of "
+                         f"{date.fromisoformat(prev['day']):%d %b} ({prev['gross_g']:.0f} g) "
+                         f"after {days} day(s). Typo?")
+    return errors, warns
+
+
+def add_reading(con, pid: int, day, gross_g: float, note: str | None = None,
+                confirmed: bool = False) -> int:
+    """Save a weigh-in. Errors always block; warnings block unless confirmed."""
     _require_unlocked(con, pid, "dry")
-    return con.execute("""INSERT INTO reading (project_id, day, gross_g, note) VALUES (?,?,?,?)
-                          ON CONFLICT(project_id, day) DO UPDATE SET gross_g=excluded.gross_g,
-                          note=excluded.note""", (pid, _iso(day), gross_g, note)).lastrowid
+    errors, warns = reading_problems(con, pid, day, gross_g)
+    if errors:
+        raise ValueError(" ".join(errors))
+    if warns and not confirmed:
+        raise ValueError("Check this weigh-in: " + " ".join(warns))
+    con.execute("""INSERT INTO reading (project_id, day, gross_g, note) VALUES (?,?,?,?)
+                   ON CONFLICT(project_id, day) DO UPDATE SET gross_g=excluded.gross_g,
+                   note=excluded.note""", (pid, _iso(day), gross_g, note))
+    return con.execute("SELECT id FROM reading WHERE project_id=? AND day=?",
+                       (pid, _iso(day))).fetchone()["id"]
 
 
 def readings(con, pid: int) -> list[tuple[date, float]]:
@@ -464,7 +524,23 @@ def delete_project(con, pid: int) -> list[str]:
     return paths
 
 
+def close_problems(con, pid: int) -> list[str]:
+    p = project(con, pid)
+    out = []
+    if not p["spice_locked_at"]:
+        out.append("lock the spice mix")
+    if not p["cure_locked_at"]:
+        out.append("lock the cure")
+    if not p["dry_locked_at"]:
+        out.append("lock drying")
+    if p["equalise_start"] and not p["equalise_end"]:
+        out.append("finish equalising (or clear its start date)")
+    return out
+
+
 def close_project(con, pid: int, final_notes: str = "") -> None:
+    if missing := close_problems(con, pid):
+        raise ValueError("Before closing: " + "; ".join(missing) + ".")
     con.execute("UPDATE project SET status='closed', closed_at=?, final_notes=? WHERE id=?",
                 (_now(), final_notes, pid))
     log(con, pid, "closed")

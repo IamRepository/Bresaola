@@ -87,6 +87,50 @@ def test_restore_rejects_other_zips(tmp_path, monkeypatch):
         z.writestr("hello.txt", "x")
     with pytest.raises(ValueError):
         storage.restore_backup(buf.getvalue())
+    with pytest.raises(ValueError, match="not a zip"):
+        storage.restore_backup(b"plain bytes")
+
+
+def test_bad_backup_leaves_data_untouched(tmp_path, monkeypatch):
+    import io, zipfile
+    monkeypatch.setenv("BRESAOLA_DATA", str(tmp_path))
+    from bresaola.demo import seed_demo
+    con = db.connect(storage.db_path()); seed_demo(con)
+    rel = storage.save_photo(1, "x.jpg", b"keep me")
+    with con:
+        db.add_photo(con, 1, rel, "2026-10-08")
+    con.close()
+    for content in (b"garbage", None):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            if content:
+                z.writestr("bresaola.sqlite", content)          # not a database
+            else:
+                import sqlite3, tempfile, os
+                f = tmp_path / "empty.sqlite"; sqlite3.connect(f).execute("CREATE TABLE x(a)").connection.commit()
+                z.write(f, "bresaola.sqlite")                   # a database, but not ours
+        with pytest.raises(ValueError):
+            storage.restore_backup(buf.getvalue())
+        con = db.connect(storage.db_path())
+        assert db.project(con, 1)["name"] == "Palermo Spicy"
+        assert storage.photo_file(rel).read_bytes() == b"keep me"
+        con.close()
+
+
+def test_good_restore_keeps_previous_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRESAOLA_DATA", str(tmp_path / "a"))
+    from bresaola.demo import seed_demo
+    con = db.connect(storage.db_path()); seed_demo(con); con.close()
+    blob = storage.make_backup()
+    monkeypatch.setenv("BRESAOLA_DATA", str(tmp_path / "b"))
+    con = db.connect(storage.db_path())
+    with con:
+        db.create_project(con, "Only in b", "Classic Italian", False, 1000)
+    con.close()
+    storage.restore_backup(blob)
+    con = db.connect(storage.db_path())
+    assert [p["name"] for p in db.projects(con)] == ["Palermo Spicy"]
+    assert (tmp_path / "b" / "before-restore" / storage.DB_NAME).exists()
 
 
 def test_delete_project_needs_exact_name(app, tmp_path):
@@ -208,3 +252,32 @@ def test_lock_drying_blocks_weigh_ins(app, tmp_path):
     assert next(b for b in app.button if b.label == "Save weigh-in").disabled
     con = db.connect(tmp_path / storage.DB_NAME)
     assert db.project(con, 1)["dry_locked_at"] and db.project(con, 1)["dry_end"]
+
+
+def test_weigh_in_typo_asks_for_confirmation(app, tmp_path):
+    next(n for n in app.number_input if n.label == "Weight incl. wrap + net [g]").set_value(196)
+    next(b for b in app.button if b.label == "Save weigh-in").click()
+    app.run()
+    assert not app.exception, app.exception
+    assert any("Check this weigh-in" in w.value for w in app.warning)
+    next(b for b in app.button if b.label == "Cancel").click()
+    app.run()
+    con = db.connect(tmp_path / storage.DB_NAME)
+    assert db.readings(con, 1)[-1][1] == 1963            # nothing saved
+
+
+def test_close_button_disabled_until_steps_locked(app):
+    assert any("Before this project can be closed: lock drying" in i.value for i in app.info)
+    assert next(b for b in app.button if b.label == "Close project").disabled
+
+
+def test_rename_to_existing_name_shows_message(app):
+    next(t for t in app.sidebar.text_input if t.label == "Name").input("Rome")
+    next(b for b in app.sidebar.button if b.label == "Create project").click()
+    app.run()
+    next(t for t in app.text_input if t.key and t.key.startswith("rn")).input("Palermo Spicy")
+    app.run()
+    next(b for b in app.button if b.label == "Rename").click()
+    app.run()
+    assert not app.exception, app.exception
+    assert any("already exists" in e.value for e in app.error)

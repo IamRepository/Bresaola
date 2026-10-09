@@ -4,6 +4,7 @@ Run:  streamlit run app.py
 """
 from __future__ import annotations
 
+import sqlite3
 from datetime import date, datetime
 
 import altair as alt
@@ -52,6 +53,9 @@ def act(fn, *a, success: str | None = None, **kw):
     except (db.Locked, ValueError) as e:
         st.error(str(e))
         return False
+    except sqlite3.IntegrityError as e:   # safety net; db functions check first
+        st.error(f"Could not save: {e}")
+        return False
     if success:
         st.session_state["flash"] = success
     st.rerun()
@@ -94,8 +98,8 @@ with st.sidebar:
                             new = db.create_project(con, name.strip(), next(iter(BLENDS)), False, weight, start_d)
                         st.session_state["pid"] = new
                         st.rerun()
-                    except Exception as e:  # unique name etc.
-                        st.error(f"Could not create: {e}")
+                    except ValueError as e:
+                        st.error(str(e))
 
     st.divider()
     st.subheader("Backup")
@@ -110,9 +114,11 @@ with st.sidebar:
             try:
                 storage.restore_backup(up.getvalue())
                 st.session_state.pop("pid", None)
-                st.session_state["flash"] = "Backup restored"
+                st.session_state["flash"] = "Backup restored. Previous data kept in 'before-restore'."
             except ValueError as e:
-                st.session_state["flash_error"] = str(e)
+                st.session_state["flash_error"] = f"Nothing was changed. {e}"
+            except Exception as e:
+                st.session_state["flash_error"] = f"Restore failed, your data is unchanged: {e}"
             st.rerun()
 
 # --------------------------------------------------------------------------- #
@@ -471,6 +477,9 @@ with tabs[1]:
            end_act.isoformat() if end_act else None)
     dirty = now != saved or (note.strip() or None) != (old_note or None)
 
+    if end_act and start and end_act < start:
+        st.error("'Taken out of the bag' is before 'Into the bag'. Check the dates.")
+
     def save_cure():
         db.set_cure(con, pid, shape=shape, thickness_cm=thick, length_cm=length or None,
                     thickness_estimated=est, start=start, end_actual=end_act, method=None,
@@ -502,6 +511,25 @@ with tabs[1]:
 # --------------------------------------------------------------------------- #
 # 3. dry
 # --------------------------------------------------------------------------- #
+
+def save_weigh_in(r: dict, confirmed: bool = False) -> None:
+    """Weigh-in + optional chamber reading + optional photo, in one transaction."""
+    try:
+        with con:
+            rid = db.add_reading(con, pid, r["day"], r["weight"], r["note"], confirmed=confirmed)
+            if (r["temp"] is not None or r["rh"] is not None) and p["chamber_id"]:
+                db.add_chamber_reading(con, p["chamber_id"], datetime.combine(
+                    r["day"], db.now_local().time()).isoformat(timespec="minutes"), r["temp"], r["rh"])
+            if r["photo"]:
+                rel = storage.save_photo(pid, *r["photo"])
+                db.add_photo(con, pid, rel, r["day"], r["note"] or f"Weigh-in {r['weight']:.0f} g",
+                             rid, stage="dry")
+    except (db.Locked, ValueError) as e:
+        st.error(str(e))
+        return
+    st.session_state["flash"] = f"Saved {r['weight']:.0f} g on {r['day']:%d %b}"
+    st.rerun()
+
 
 with tabs[2]:
     if not p["dry_start"]:
@@ -573,22 +601,27 @@ with tabs[2]:
                 rn = st.text_input("Note", placeholder="optional: smell, firmness, mould ...")
                 ph = st.file_uploader("Photo", type=["jpg", "jpeg", "png", "webp"])
                 if st.form_submit_button("Save weigh-in", type="primary", disabled=d_locked):
-                    try:
-                        with con:
-                            rid = db.add_reading(con, pid, rd, rw, rn or None)
-                            if (rt is not None or rh is not None) and p["chamber_id"]:
-                                db.add_chamber_reading(con, p["chamber_id"],
-                                                       datetime.combine(rd, db.now_local().time()).isoformat(timespec="minutes"),
-                                                       rt, rh)
-                            if ph is not None:
-                                rel = storage.save_photo(pid, ph.name, ph.getvalue())
-                                rid = con.execute("SELECT id FROM reading WHERE project_id=? AND day=?",
-                                                  (pid, rd.isoformat())).fetchone()["id"]
-                                db.add_photo(con, pid, rel, rd, rn or f"Weigh-in {rw:.0f} g", rid, stage="dry")
-                        st.session_state["flash"] = f"Saved {rw:.0f} g on {rd:%d %b}"
+                    errors, warns = db.reading_problems(con, pid, rd, rw)
+                    pending = dict(day=rd, weight=rw, temp=rt, rh=rh, note=rn or None,
+                                   photo=(ph.name, ph.getvalue()) if ph is not None else None)
+                    if errors:
+                        st.error(" ".join(errors))
+                    elif warns:
+                        st.session_state[f"pending{pid}"] = (pending, warns)
                         st.rerun()
-                    except db.Locked as e:
-                        st.error(str(e))
+                    else:
+                        save_weigh_in(pending)
+
+            if f"pending{pid}" in st.session_state:
+                pending, warns = st.session_state[f"pending{pid}"]
+                st.warning("**Check this weigh-in before saving.**  \n" + "  \n".join(warns))
+                c1, c2, _ = st.columns([1.3, 1, 2])
+                if c1.button("Save anyway", type="primary", key=f"pend_ok{pid}", width="stretch"):
+                    del st.session_state[f"pending{pid}"]
+                    save_weigh_in(pending, confirmed=True)
+                if c2.button("Cancel", key=f"pend_no{pid}", width="stretch"):
+                    del st.session_state[f"pending{pid}"]
+                    st.rerun()
         with right:
             st.subheader("Weigh-ins")
             tdf = pd.DataFrame([{
@@ -686,10 +719,13 @@ with tabs[5]:
     else:
         st.subheader("Close project")
         st.caption("Closing makes the project read-only. The PDF summary arrives in a later version.")
+        missing = db.close_problems(con, pid)
+        if missing:
+            st.info("Before this project can be closed: " + "; ".join(missing) + ".")
         with st.form(f"close{pid}"):
             fn = st.text_area("Final notes: texture, taste, what to change next time", height=120)
             sure = st.checkbox("I understand the project becomes read-only")
-            if st.form_submit_button("Close project", type="primary"):
+            if st.form_submit_button("Close project", type="primary", disabled=bool(missing)):
                 if not sure:
                     st.error("Tick the box to confirm")
                 else:
