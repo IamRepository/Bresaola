@@ -20,7 +20,7 @@ import openpyxl
 
 from . import db
 
-PROJECT_NAME = "Palermo Spicy 2026"
+PROJECT_NAME = "Palermo Spicy"
 SHEET_SPICE, SHEET_CURE, SHEET_DRY = "1. Spice mix", "2. Brining time", "3. Drying weight"
 CALABRIAN_ROWS = range(19, 29)          # salt .. bay leaf (EcoCure row 18 is NIL)
 CORRECT_DRY_START_G = 2100.0
@@ -55,10 +55,11 @@ def seed(xlsx_path: str, db_path: str) -> int:
         dry_start = _d(dr["C2"].value)
         db.set_cure(con, pid, shape=str(cu["C3"].value).lower(), thickness_cm=float(cu["C4"].value),
                     start=_d(cu["C2"].value), thickness_estimated=True,
-                    method="Equilibrium dry cure, vacuum-sealed, fridge, flipped and massaged daily",
                     end_actual=dry_start,
-                    note="17 cm = widest side of an oval piece; cured longer than needed. "
+                    note="Equilibrium dry cure, vacuum-sealed, fridge, flipped and massaged daily.\n"
+                         "17 cm = widest side of an oval piece; cured longer than needed. "
                          "Unbagged 2 days after plan (travelling).")
+        db.lock_cure(con, pid)
 
         # drying
         chamber = db.get_or_create_chamber(con, "Fridge drawer", "TP-Link Tapo T315 via H100 hub")

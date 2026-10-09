@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS project (
     cure_end_planned    TEXT,
     cure_end_actual     TEXT,
     cure_note           TEXT,
+    cure_locked_at      TEXT,
     -- stage 3: dry
     chamber_id          INTEGER REFERENCES chamber(id),
     dry_start           TEXT,
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS project (
     target_loss_pct     REAL NOT NULL DEFAULT 35,
     dry_end             TEXT,
     dry_note            TEXT,
+    dry_locked_at       TEXT,
     -- stage 4: equalise (optional)
     equalise_start      TEXT,
     equalise_end        TEXT,
@@ -144,7 +146,8 @@ def _iso(d) -> str | None:
 
 
 # columns added after v0.2.0; older databases (and backups) get them on open
-MIGRATIONS = {"project": [("start_date", "TEXT"), ("spice_note", "TEXT")],
+MIGRATIONS = {"project": [("start_date", "TEXT"), ("spice_note", "TEXT"),
+                          ("cure_locked_at", "TEXT"), ("dry_locked_at", "TEXT")],
               "photo": [("stage", "TEXT")]}
 
 
@@ -157,6 +160,13 @@ def connect(path: str | Path) -> sqlite3.Connection:
         for col, typ in cols:
             if col not in have:
                 con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+                # before locks existed, an end date meant the step was finished
+                if col == "cure_locked_at":
+                    con.execute("UPDATE project SET cure_locked_at = cure_end_actual || 'T00:00:00' "
+                                "WHERE cure_end_actual IS NOT NULL")
+                if col == "dry_locked_at":
+                    con.execute("UPDATE project SET dry_locked_at = dry_end || 'T00:00:00' "
+                                "WHERE dry_end IS NOT NULL")
     con.execute("UPDATE project SET start_date = substr(created_at, 1, 10) WHERE start_date IS NULL")
     con.commit()
     return con
@@ -188,6 +198,15 @@ def project(con, project_id: int) -> sqlite3.Row:
     if row is None:
         raise KeyError(project_id)
     return row
+
+
+def _require_unlocked(con, project_id: int, step: str):
+    """step: 'cure' or 'dry'. Notes and photos skip this check on purpose."""
+    p = project(con, project_id)
+    if p["status"] == "closed":
+        raise Locked("Project is closed")
+    if p[f"{step}_locked_at"]:
+        raise Locked(f"{'Cure' if step == 'cure' else 'Drying'} is locked; unlock it first")
 
 
 def _require_open(con, project_id: int):
@@ -245,8 +264,8 @@ def set_actual(con, pid: int, position: int, actual: float | None, note: str | N
 
 
 def set_spice_note(con, pid: int, note: str | None) -> None:
-    if project(con, pid)["spice_locked_at"]:
-        raise Locked("Spice mix is locked; unlock it first")
+    """Notes stay editable after the spice mix is locked."""
+    _require_open(con, pid)
     con.execute("UPDATE project SET spice_note=? WHERE id=?", (note or None, pid))
 
 
@@ -274,7 +293,7 @@ def ingredient_lines(con, pid: int) -> list[sqlite3.Row]:
 
 def set_cure(con, pid: int, *, shape: str, thickness_cm: float, start, length_cm=None,
              thickness_estimated=False, method=None, end_actual=None, note=None) -> None:
-    _require_open(con, pid)
+    _require_unlocked(con, pid, "cure")
     planned = calc.cure_end_date(date.fromisoformat(_iso(start)), thickness_cm, shape)
     con.execute("""UPDATE project SET shape=?, thickness_cm=?, length_cm=?, thickness_estimated=?,
                    cure_method=?, cure_start=?, cure_end_planned=?, cure_end_actual=?, cure_note=?
@@ -283,10 +302,58 @@ def set_cure(con, pid: int, *, shape: str, thickness_cm: float, start, length_cm
                  _iso(start), planned.isoformat(), _iso(end_actual), note, pid))
 
 
+def set_cure_note(con, pid: int, note: str | None) -> None:
+    """Notes stay editable after the cure is locked."""
+    _require_open(con, pid)
+    con.execute("UPDATE project SET cure_note=? WHERE id=?", (note or None, pid))
+
+
+def lock_cure(con, pid: int) -> None:
+    p = project(con, pid)
+    if not p["cure_end_actual"]:
+        raise ValueError("Enter the date the meat came out of the bag before locking")
+    con.execute("UPDATE project SET cure_locked_at=? WHERE id=?", (_now(), pid))
+    log(con, pid, "cure_locked")
+
+
+def unlock_cure(con, pid: int, reason: str) -> None:
+    _require_open(con, pid)
+    con.execute("UPDATE project SET cure_locked_at=NULL WHERE id=?", (pid,))
+    log(con, pid, "cure_unlocked", reason)
+
+
+def set_dry_note(con, pid: int, note: str | None) -> None:
+    """Notes stay editable after drying is locked."""
+    _require_open(con, pid)
+    con.execute("UPDATE project SET dry_note=? WHERE id=?", (note or None, pid))
+
+
+def lock_dry(con, pid: int, end_day) -> None:
+    """Drying finished: record the end date and lock weigh-ins and settings."""
+    _require_open(con, pid)
+    con.execute("UPDATE project SET dry_end=?, dry_locked_at=? WHERE id=?", (_iso(end_day), _now(), pid))
+    log(con, pid, "dry_locked", f"ended {_iso(end_day)}")
+
+
+def unlock_dry(con, pid: int, reason: str) -> None:
+    _require_open(con, pid)
+    con.execute("UPDATE project SET dry_locked_at=NULL WHERE id=?", (pid,))
+    log(con, pid, "dry_unlocked", reason)
+
+
+def rename_project(con, pid: int, name: str) -> None:
+    name = name.strip()
+    if not name:
+        raise ValueError("Name cannot be empty")
+    old = project(con, pid)["name"]
+    con.execute("UPDATE project SET name=? WHERE id=?", (name, pid))
+    log(con, pid, "renamed", f"{old} -> {name}")
+
+
 def set_drying(con, pid: int, *, start, start_gross_g: float, chamber_id: int | None = None,
                tare_g: float = 0.0, tare_estimated: bool = True,
                target_loss_pct: float = 35.0, note=None) -> None:
-    _require_open(con, pid)
+    _require_unlocked(con, pid, "dry")
     con.execute("""UPDATE project SET dry_start=?, dry_start_gross_g=?, chamber_id=?, tare_g=?,
                    tare_estimated=?, target_loss_pct=?, dry_note=? WHERE id=?""",
                 (_iso(start), start_gross_g, chamber_id, tare_g, int(tare_estimated),
@@ -296,14 +363,14 @@ def set_drying(con, pid: int, *, start, start_gross_g: float, chamber_id: int | 
 
 
 def change_target(con, pid: int, new_pct: float, reason: str = "") -> None:
-    _require_open(con, pid)
+    _require_unlocked(con, pid, "dry")
     old = project(con, pid)["target_loss_pct"]
     con.execute("UPDATE project SET target_loss_pct=? WHERE id=?", (new_pct, pid))
     log(con, pid, "target_changed", f"{old} % -> {new_pct} % {reason}".strip())
 
 
 def add_reading(con, pid: int, day, gross_g: float, note: str | None = None) -> int:
-    _require_open(con, pid)
+    _require_unlocked(con, pid, "dry")
     return con.execute("""INSERT INTO reading (project_id, day, gross_g, note) VALUES (?,?,?,?)
                           ON CONFLICT(project_id, day) DO UPDATE SET gross_g=excluded.gross_g,
                           note=excluded.note""", (pid, _iso(day), gross_g, note)).lastrowid
@@ -332,12 +399,12 @@ def set_equalise(con, pid: int, *, start=None, end=None, end_gross_g=None, note=
 
 
 def end_drying(con, pid: int, day) -> None:
-    _require_open(con, pid)
+    _require_unlocked(con, pid, "dry")
     con.execute("UPDATE project SET dry_end=? WHERE id=?", (_iso(day), pid))
 
 
 def delete_reading(con, pid: int, day) -> None:
-    _require_open(con, pid)
+    _require_unlocked(con, pid, "dry")
     con.execute("DELETE FROM reading WHERE project_id=? AND day=?", (pid, _iso(day)))
 
 

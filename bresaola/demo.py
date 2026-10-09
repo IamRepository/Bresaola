@@ -9,7 +9,7 @@ from datetime import date
 
 from . import db
 
-NAME = "Palermo Spicy 2026 (demo)"
+NAME = "Palermo Spicy"
 ACTUALS = {"Fennel seed, powder": (4.2, "Used less fennel than planned")}
 READINGS = [(date(2026, 9, 26), 2057), (date(2026, 9, 30), 2026),
             (date(2026, 10, 4), 1990), (date(2026, 10, 8), 1963)]
@@ -25,8 +25,9 @@ def seed_demo(con) -> int:
         db.lock_spice(con, pid)
         db.set_cure(con, pid, shape="tubular", thickness_cm=17, start=date(2026, 8, 15),
                     thickness_estimated=True, end_actual=date(2026, 9, 20),
-                    method="Equilibrium dry cure, vacuum-sealed, fridge, flipped and massaged daily",
-                    note="17 cm = widest side of an oval piece; cured longer than needed.")
+                    note="Equilibrium dry cure, vacuum-sealed, fridge, flipped and massaged daily.\n"
+                         "17 cm = widest side of an oval piece; cured longer than needed.")
+        db.lock_cure(con, pid)
         ch = db.get_or_create_chamber(con, "Fridge drawer", "TP-Link Tapo T315 via H100 hub")
         db.set_drying(con, pid, start=date(2026, 9, 20), start_gross_g=2100, chamber_id=ch,
                       tare_g=0, tare_estimated=True, target_loss_pct=35,

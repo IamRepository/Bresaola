@@ -119,11 +119,50 @@ def test_old_database_gets_new_columns(tmp_path):
     path = tmp_path / "old.sqlite"
     raw = sqlite3.connect(path)
     raw.executescript(db.SCHEMA.replace("    start_date          TEXT,                       -- day the meat was trimmed and spiced\n", "")
-                               .replace("    spice_note          TEXT,\n", ""))
-    raw.execute("INSERT INTO project (name, created_at, blend, ecocure, green_weight_g) "
-                "VALUES ('Old', '2026-09-01T10:00:00', 'Classic Italian', 0, 1500)")
+                               .replace("    spice_note          TEXT,\n", "")
+                               .replace("    cure_locked_at      TEXT,\n", "")
+                               .replace("    dry_locked_at       TEXT,\n", ""))
+    raw.execute("INSERT INTO project (name, created_at, blend, ecocure, green_weight_g, cure_end_actual) "
+                "VALUES ('Old', '2026-09-01T10:00:00', 'Classic Italian', 0, 1500, '2026-09-20')")
     raw.commit(); raw.close()
     con = db.connect(path)
     p = db.project(con, 1)
     assert p["start_date"] == "2026-09-01" and p["spice_note"] is None
     assert db.display_name(p) == "26/09/01 Old"
+    assert p["cure_locked_at"] == "2026-09-20T00:00:00"   # finished cure counts as locked
+    assert p["dry_locked_at"] is None
+
+
+def test_cure_and_dry_locks(con):
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    db.set_cure(con, pid, shape="tubular", thickness_cm=10, start=date(2026, 8, 1))
+    with pytest.raises(ValueError):
+        db.lock_cure(con, pid)                       # needs an end date
+    db.set_cure(con, pid, shape="tubular", thickness_cm=10, start=date(2026, 8, 1),
+                end_actual=date(2026, 8, 13))
+    db.lock_cure(con, pid)
+    with pytest.raises(db.Locked):
+        db.set_cure(con, pid, shape="flat", thickness_cm=10, start=date(2026, 8, 1))
+    db.set_cure_note(con, pid, "still allowed")
+    db.add_photo(con, pid, "photos/1/x.jpg", "2026-08-13", stage="cure")   # photos allowed too
+    db.set_drying(con, pid, start=date(2026, 8, 13), start_gross_g=2100)
+    db.lock_dry(con, pid, date(2026, 11, 1))
+    for f in (lambda: db.add_reading(con, pid, date(2026, 11, 2), 1300),
+              lambda: db.change_target(con, pid, 30),
+              lambda: db.delete_reading(con, pid, date(2026, 8, 13))):
+        with pytest.raises(db.Locked):
+            f()
+    db.set_dry_note(con, pid, "fine")
+    db.unlock_dry(con, pid, "one more weigh-in")
+    db.add_reading(con, pid, date(2026, 11, 2), 1300)
+    kinds = [r["kind"] for r in db.events(con, pid)]
+    assert kinds[-3:] == ["cure_locked", "dry_locked", "dry_unlocked"]
+
+
+def test_rename(con):
+    pid = db.create_project(con, "Palermo Spicy 2026 (demo)", "Spicy Calabrian", False, 2088,
+                            start_date=date(2026, 8, 15))
+    db.rename_project(con, pid, "Palermo Spicy")
+    assert db.display_name(db.project(con, pid)) == "26/08/15 Palermo Spicy"
+    with pytest.raises(ValueError):
+        db.rename_project(con, pid, "  ")

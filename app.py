@@ -173,6 +173,16 @@ div[role="tablist"]::after, .react-aria-SelectionIndicator {{ display: none !imp
                  "optional": "{ color:#8a8480; border-style:dashed; }"}[s]]
 ) + "</style>", unsafe_allow_html=True)
 
+
+def unlock_panel(step: str, locked_at: str, unlock_fn, label: str):
+    st.caption(f"{label} locked on {locked_at[:16].replace('T', ' at ')}. "
+               "Notes and photos can still be added.")
+    with st.expander(f"Unlock {label.lower()} to edit"):
+        reason = st.text_input("Reason (saved in history)", key=f"unl{step}{pid}")
+        if st.button(f"Unlock {label.lower()}", disabled=not reason.strip(), key=f"unlb{step}{pid}"):
+            act(unlock_fn, pid, reason.strip(), success=f"{label} unlocked")
+
+
 # --- photos belong to the stage they were taken in ------------------------- #
 STAGE_NAME = {"spice": "Spice mix", "cure": "Cure", "dry": "Dry", "equalise": "Equalise", None: "Other"}
 
@@ -310,7 +320,7 @@ with tabs[0]:
                        ", ".join(f"{n} ({dv*100:+.0f} %)" for n, dv in off))
 
     spice_note = st.text_area("Notes", value=p["spice_note"] or "", height=90, key=f"sn{pid}{ver}",
-                              disabled=locked,
+                              disabled=closed,
                               placeholder="e.g. used fresh rosemary, ground the pepper myself, mixed by hand")
 
     # --- actions ------------------------------------------------------------ #
@@ -335,11 +345,9 @@ with tabs[0]:
             st.session_state["flash"] = "Spice mix locked"
             st.rerun()
     else:
-        st.caption(f"Locked on {p['spice_locked_at'][:16].replace('T', ' at ')}.")
-        with st.expander("Unlock to edit"):
-            reason = st.text_input("Reason (saved in history)", key=f"unl{pid}")
-            if st.button("Unlock spice mix", disabled=not reason.strip()):
-                act(db.unlock_spice, pid, reason.strip(), success="Unlocked")
+        if st.button("Save notes", key=f"snb{pid}", disabled=(spice_note.strip() or None) == p["spice_note"]):
+            act(db.set_spice_note, pid, spice_note.strip(), success="Notes saved")
+        unlock_panel("spice", p["spice_locked_at"], db.unlock_spice, "Spice mix")
 
     photo_section("spice")
 
@@ -392,7 +400,8 @@ with tabs[1]:
 .cureband .chip.run {{ background:#f1efee; color:#5f5955; }}
 .cureband .track {{ position:relative; height:8px; background:#f1efee; border-radius:4px; margin-top:1rem; }}
 .cureband .fill {{ position:absolute; left:0; top:0; bottom:0; background:#7a2320; border-radius:4px; }}
-.cureband .mark {{ position:absolute; top:-4px; width:2px; height:16px; background:#2e2a28; }}
+.cureband .mark {{ position:absolute; top:-5px; width:4px; height:18px; background:#fff;
+                   border:1.5px solid #2e2a28; border-radius:2px; box-sizing:border-box; }}
 .cureband .ends {{ position:relative; height:1.1rem; font-size:.75rem; color:#7d7672; margin-top:.3rem; }}
 .cureband .ends span {{ position:absolute; white-space:nowrap; }}
 @media (max-width: 640px) {{ .cureband .grid {{ grid-template-columns:1fr 1fr; }} }}
@@ -415,27 +424,28 @@ with tabs[1]:
   <div class="track"><div class="fill" style="width:{fill:.1f}%"></div>
        <div class="mark" style="left:calc({mark:.1f}% - 1px)" title="Planned end"></div></div>
   <div class="ends"><span style="left:0">{start:%d %b}</span>
-       <span style="left:{mark:.1f}%; transform:translateX({'-100%' if mark > 80 else '-50%'})">planned end {planned:%d %b}</span>
+       <span style="left:{mark:.1f}%; transform:translateX({'-100%' if mark > 80 else '-50%'})">▲ planned end {planned:%d %b}</span>
        {'' if mark > 80 else f'<span style="right:0">{max(planned, run_to):%d %b}</span>'}</div>
 </div>""", unsafe_allow_html=True)
 
     # --- inputs ------------------------------------------------------------ #
+    c_locked = bool(p["cure_locked_at"]) or closed
     left_col, right_col = st.columns(2, gap="medium")
     with left_col.container(border=True):
         st.markdown("**The piece**")
         st.segmented_control("Shape", ["tubular", "flat"], default=p["shape"] or "tubular",
-                             key=k + "shape", disabled=closed,
+                             key=k + "shape", disabled=c_locked,
                              help="Tubular: eye of round, tenderloin. Flat: brisket.")
         c1, c2 = st.columns(2)
         c1.number_input("Thickness [cm]", min_value=0.5, step=0.5, format="%.1f",
-                        value=float(p["thickness_cm"] or 8.0), key=k + "thick", disabled=closed,
+                        value=float(p["thickness_cm"] or 8.0), key=k + "thick", disabled=c_locked,
                         help="Narrowest dimension across the thickest part. This sets the cure time.")
         length = c2.number_input("Length [cm]", min_value=0.0, step=0.5, format="%.1f",
                                  value=float(p["length_cm"]) if p["length_cm"] else None,
-                                 placeholder="optional", key=k + "len", disabled=closed,
+                                 placeholder="optional", key=k + "len", disabled=c_locked,
                                  help="Used only to check the measurements against the weight.")
         est = st.checkbox("Thickness is an estimate", value=bool(p["thickness_estimated"]),
-                          key=k + "est", disabled=closed)
+                          key=k + "est", disabled=c_locked)
         if shape == "tubular" and length:
             implied_g = 1.05 * 3.1416 * (thick / 2) ** 2 * length
             if not 0.6 < implied_g / p["green_weight_g"] < 1.6:
@@ -445,30 +455,44 @@ with tabs[1]:
     with right_col.container(border=True):
         st.markdown("**Dates**")
         st.date_input("Into the bag", value=d(p["cure_start"]) or db.today(), format="DD/MM/YYYY",
-                      key=k + "start", disabled=closed)
+                      key=k + "start", disabled=c_locked)
         st.date_input("Taken out of the bag", value=d(p["cure_end_actual"]), format="DD/MM/YYYY",
-                      key=k + "end", disabled=closed, help="Leave empty while the meat is still curing.")
+                      key=k + "end", disabled=c_locked, help="Leave empty while the meat is still curing.")
 
-    with st.container(border=True):
-        method = st.text_input("Method", key=k + "method", disabled=closed,
-                               value=p["cure_method"] or
-                               "Equilibrium dry cure, vacuum-sealed, fridge, flipped and massaged daily")
-        note = st.text_area("Notes and exceptions", value=p["cure_note"] or "", height=90,
-                            key=k + "note", disabled=closed,
-                            placeholder="e.g. missed a flip on day 12, lots of liquid on day 3")
+    # one notes field (method used to be separate; old text is folded in)
+    old_note = "\n".join(x for x in (p["cure_method"], p["cure_note"]) if x)
+    note = st.text_area("Notes", value=old_note, height=110, key=k + "note", disabled=closed,
+                        placeholder="Method and exceptions, e.g. vacuum-sealed, flipped daily; "
+                                    "missed a flip on day 12")
 
     saved = (p["shape"], p["thickness_cm"], p["length_cm"], bool(p["thickness_estimated"]),
-             p["cure_start"], p["cure_end_actual"], p["cure_method"], p["cure_note"])
+             p["cure_start"], p["cure_end_actual"])
     now = (shape, thick, length or None, est, start.isoformat() if start else None,
-           end_act.isoformat() if end_act else None, method, note or None)
-    dirty = now != saved
-    b1, b2 = st.columns([1, 5], vertical_alignment="center")
-    if b1.button("Save cure", type="primary", disabled=closed or not dirty, key=k + "save"):
-        act(db.set_cure, pid, shape=shape, thickness_cm=thick, length_cm=length or None,
-            thickness_estimated=est, start=start, end_actual=end_act,
-            method=method, note=note or None, success="Cure saved")
-    if dirty and not closed:
-        b2.caption("Unsaved changes")
+           end_act.isoformat() if end_act else None)
+    dirty = now != saved or (note.strip() or None) != (old_note or None)
+
+    def save_cure():
+        db.set_cure(con, pid, shape=shape, thickness_cm=thick, length_cm=length or None,
+                    thickness_estimated=est, start=start, end_actual=end_act, method=None,
+                    note=note.strip() or None)
+
+    if closed:
+        pass
+    elif not p["cure_locked_at"]:
+        b1, b2, b3 = st.columns([1.2, 1.6, 4], vertical_alignment="center")
+        if b1.button("Save cure", disabled=not dirty, key=k + "save", width="stretch"):
+            act(lambda con_: save_cure(), success="Cure saved")
+        if b2.button("Done: lock cure", type="primary", key=k + "lock", width="stretch",
+                     disabled=not end_act, help=None if end_act else "Enter the date it came out of the bag first"):
+            def _save_and_lock(con_, pid_):
+                save_cure(); db.lock_cure(con_, pid_)
+            act(_save_and_lock, pid, success="Cure locked")
+        if dirty:
+            b3.caption("Unsaved changes")
+    else:
+        if st.button("Save notes", key=k + "savenote", disabled=(note.strip() or None) == (old_note or None)):
+            act(db.set_cure_note, pid, note.strip(), success="Notes saved")
+        unlock_panel("cure", p["cure_locked_at"], db.unlock_cure, "Cure")
 
     st.caption("Cure time uses the genuineideas.com equilibrium calculator: 1.25 × (thickness in inches)² "
                "days for flat, half for tubular, +20 % to reach the centre. Assumes a fridge at 1–3 °C.")
@@ -500,6 +524,7 @@ with tabs[2]:
                 act(db.set_drying, pid, start=ds, start_gross_g=sg, chamber_id=ch, tare_g=tare,
                     tare_estimated=tare_est, target_loss_pct=tp, success="Drying started")
     else:
+        d_locked = bool(p["dry_locked_at"]) or closed
         s = db.drying_status(con, pid)
         eta = s["eta"]
         m = st.columns(5)
@@ -547,7 +572,7 @@ with tabs[2]:
                 rh = c4.number_input("Chamber humidity [%]", value=None, step=1.0, placeholder="optional")
                 rn = st.text_input("Note", placeholder="optional: smell, firmness, mould ...")
                 ph = st.file_uploader("Photo", type=["jpg", "jpeg", "png", "webp"])
-                if st.form_submit_button("Save weigh-in", type="primary", disabled=closed):
+                if st.form_submit_button("Save weigh-in", type="primary", disabled=d_locked):
                     try:
                         with con:
                             rid = db.add_reading(con, pid, rd, rw, rn or None)
@@ -572,26 +597,41 @@ with tabs[2]:
                 "Lost [%]": round(calc.loss_pct(s["start_gross_g"], r["gross_g"], p["tare_g"]), 1),
                 "Note": r["note"] or ""} for r in rows])
             st.dataframe(tdf, hide_index=True, width="stretch", height=280)
-            if not closed and len(rows) > 1:
+            if not d_locked and len(rows) > 1:
                 with st.expander("Delete a weigh-in"):
                     choice = st.selectbox("Weigh-in", [r["day"] for r in rows[1:]], format_func=fmt_date)
                     if st.button("Delete"):
                         act(db.delete_reading, pid, choice, success="Deleted")
 
-        with st.expander("Settings: target, packaging, end of drying"):
+        with st.expander("Settings: target and packaging"):
             c1, c2 = st.columns(2)
-            nt = c1.number_input("Target loss [%]", min_value=1.0, max_value=70.0,
+            nt = c1.number_input("Target loss [%]", min_value=1.0, max_value=70.0, disabled=d_locked,
                                  value=float(p["target_loss_pct"]), step=0.5, key=f"tgt{pid}")
-            why = c2.text_input("Reason for change", key=f"why{pid}")
-            if st.button("Change target", disabled=closed or nt == p["target_loss_pct"]):
+            why = c2.text_input("Reason for change", key=f"why{pid}", disabled=d_locked)
+            if st.button("Change target", disabled=d_locked or nt == p["target_loss_pct"]):
                 act(db.change_target, pid, nt, why, success="Target changed")
-            st.caption(f"Packaging weight {p['tare_g']:g} g"
-                       + (" (estimate)" if p["tare_estimated"] else "")
-                       + (f" · {p['dry_note']}" if p["dry_note"] else ""))
-            de = st.date_input("Drying ended", value=d(p["dry_end"]) or db.today(),
+            st.caption(f"Packaging weight {p['tare_g']:g} g" + (" (estimate)" if p["tare_estimated"] else ""))
+
+        dry_note = st.text_area("Notes", value=p["dry_note"] or "", height=100, key=f"dn{pid}",
+                                disabled=closed, placeholder="e.g. wrap doubled on one side; white bloom on day 30")
+        note_dirty = (dry_note.strip() or None) != p["dry_note"]
+        if closed:
+            pass
+        elif not p["dry_locked_at"]:
+            c1, c2, c3, _ = st.columns([1.2, 1.4, 1.6, 2.5], vertical_alignment="bottom")
+            if c1.button("Save notes", disabled=not note_dirty, key=f"dnb{pid}", width="stretch"):
+                act(db.set_dry_note, pid, dry_note.strip(), success="Notes saved")
+            de = c2.date_input("Drying ended", value=d(p["dry_end"]) or db.today(),
                                format="DD/MM/YYYY", key=f"de{pid}")
-            if st.button("Mark drying finished", disabled=closed):
-                act(db.end_drying, pid, de, success="Drying finished")
+            if c3.button("Done: lock drying", type="primary", key=f"dlk{pid}", width="stretch"):
+                def _note_and_lock(con_, pid_):
+                    db.set_dry_note(con_, pid_, dry_note.strip()); db.lock_dry(con_, pid_, de)
+                act(_note_and_lock, pid, success="Drying locked")
+        else:
+            if st.button("Save notes", disabled=not note_dirty, key=f"dnb{pid}"):
+                act(db.set_dry_note, pid, dry_note.strip(), success="Notes saved")
+            st.caption(f"Drying ended {fmt_date(p['dry_end'])}.")
+            unlock_panel("dry", p["dry_locked_at"], db.unlock_dry, "Drying")
 
     if p["dry_start"]:
         photo_section("dry")
@@ -654,6 +694,11 @@ with tabs[5]:
                     st.error("Tick the box to confirm")
                 else:
                     act(db.close_project, pid, fn, success="Project closed")
+    with st.expander("Rename project"):
+        new_name = st.text_input("Name", value=p["name"], key=f"rn{pid}",
+                                 help="The date in front comes from the start date and is added automatically.")
+        if st.button("Rename", disabled=closed or new_name.strip() in ("", p["name"]), key=f"rnb{pid}"):
+            act(db.rename_project, pid, new_name, success="Renamed")
     st.subheader("History")
     ev = db.events(con, pid)
     st.dataframe(pd.DataFrame([{"When": e["ts"].replace("T", " "), "What": e["kind"].replace("_", " "),

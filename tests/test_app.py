@@ -25,7 +25,7 @@ def metrics(at):
 
 def test_renders_demo_project_in_test_mode(app):
     assert any("Test mode" in w.value for w in app.warning)
-    assert app.header[0].value == "26/08/15 Palermo Spicy 2026 (demo)"
+    assert app.header[0].value == "26/08/15 Palermo Spicy"
     m = metrics(app)
     assert m["Total planned [g]"] == "126.3"
     assert m["Total actual [g]"] == "120.1"
@@ -96,7 +96,7 @@ def test_delete_project_needs_exact_name(app, tmp_path):
     app.run()
     assert btn().disabled
     next(t for t in app.text_input if t.label.startswith("Type the project name")).input(
-        "Palermo Spicy 2026 (demo)")
+        "Palermo Spicy")
     app.run()
     btn().click()
     app.run()
@@ -115,7 +115,34 @@ def test_cure_band_shows_dates_and_days(app):
         assert text in html, text
 
 
+def unlock(app, step_label):
+    i = [b.label for b in app.button].index(f"Unlock {step_label}")
+    reasons = [t for t in app.text_input if t.label == "Reason (saved in history)"]
+    # the reason field sits right before its button; pick by key suffix
+    key = {"spice mix": "unlspice", "cure": "unlcure", "drying": "unldry"}[step_label]
+    next(t for t in reasons if t.key.startswith(key)).input("test")
+    app.run()
+    next(b for b in app.button if b.label == f"Unlock {step_label}").click()
+    app.run()
+    assert not app.exception, app.exception
+
+
+def test_cure_locked_in_demo_notes_still_editable(app, tmp_path):
+    assert any(b.label == "Unlock cure" for b in app.button)
+    assert next(n for n in app.number_input if n.label == "Thickness [cm]").disabled
+    notes = [t for t in app.text_area if t.label == "Notes"]
+    cure_notes = next(t for t in notes if "Equilibrium dry cure" in (t.value or ""))
+    assert not cure_notes.disabled
+    cure_notes.input("Equilibrium dry cure. Bag leaked on day 3.")
+    app.run()
+    next(b for b in app.button if b.label == "Save notes" and b.key.startswith("cure")).click()
+    app.run()
+    assert not app.exception, app.exception
+    assert "leaked" in db.project(db.connect(tmp_path / storage.DB_NAME), 1)["cure_note"]
+
+
 def test_cure_tab_live_recalc_and_save(app, tmp_path):
+    unlock(app, "cure")
     # demo is saved, so nothing to save yet
     save = lambda: next(b for b in app.button if b.label == "Save cure")
     assert save().disabled
@@ -140,12 +167,10 @@ def test_new_project_with_own_start_date(app, tmp_path):
 
 
 def test_spice_notes_saved(app, tmp_path):
-    next(t for t in app.text_input if t.label == "Reason (saved in history)").input("notes")
-    app.run()
-    next(b for b in app.button if b.label == "Unlock spice mix").click()
-    app.run()
+    # notes can be saved while locked
     next(t for t in app.text_area if t.label == "Notes").input("Mixed by hand")
-    next(b for b in app.button if b.label == "Save actual amounts").click()
+    app.run()
+    next(b for b in app.button if b.label == "Save notes").click()
     app.run()
     assert not app.exception, app.exception
     assert db.project(db.connect(tmp_path / storage.DB_NAME), 1)["spice_note"] == "Mixed by hand"
@@ -174,3 +199,12 @@ def test_photos_belong_to_their_step(tmp_path, monkeypatch):
     con = db.connect(storage.db_path())
     assert [r["caption"] for r in db.photos(con, 1, "spice")] == ["spice rub"]
     assert [r["caption"] for r in db.photos(con, 1, "cure")] == ["unbagged"]
+
+
+def test_lock_drying_blocks_weigh_ins(app, tmp_path):
+    next(b for b in app.button if b.label == "Done: lock drying").click()
+    app.run()
+    assert not app.exception, app.exception
+    assert next(b for b in app.button if b.label == "Save weigh-in").disabled
+    con = db.connect(tmp_path / storage.DB_NAME)
+    assert db.project(con, 1)["dry_locked_at"] and db.project(con, 1)["dry_end"]

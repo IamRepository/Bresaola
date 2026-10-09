@@ -2,8 +2,8 @@ from bresaola.stages import stage_states
 
 
 def P(**kw):
-    base = dict(status="active", spice_locked_at=None, cure_start=None, cure_end_actual=None,
-                dry_start=None, dry_end=None, equalise_start=None, equalise_end=None)
+    base = dict(status="active", spice_locked_at=None, cure_start=None, cure_locked_at=None,
+                dry_start=None, dry_locked_at=None, equalise_start=None, equalise_end=None)
     base.update(kw)
     return base
 
@@ -13,12 +13,12 @@ def test_new_project_is_on_spice_mix():
 
 
 def test_palermo_today_is_drying():
-    p = P(spice_locked_at="x", cure_start="a", cure_end_actual="b", dry_start="c")
+    p = P(spice_locked_at="x", cure_start="a", cure_locked_at="b", dry_start="c")
     assert stage_states(p) == ["done", "done", "current", "optional"]
 
 
 def test_after_drying_equalise_stays_optional_until_started():
-    p = P(spice_locked_at="x", cure_end_actual="b", dry_end="d")
+    p = P(spice_locked_at="x", cure_locked_at="b", dry_locked_at="d")
     assert stage_states(p) == ["done", "done", "done", "optional"]
     assert stage_states({**p, "equalise_start": "e"})[3] == "current"
 
