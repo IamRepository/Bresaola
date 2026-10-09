@@ -2,14 +2,16 @@
 
 Records home-cured bresaola batches from spice mix to slicing: calculated amounts, cure time, weigh-ins, chamber temperature/humidity and photos, then a PDF summary when the batch is closed.
 
-**Status: v0.2.0 — Streamlit app with all stages, photos, backup/restore. PDF export not yet built.**
+**Status: v0.3.0 — journey layout: one screen per step, Done locks the step and jumps to the next. PDF export not yet built.**
 
-## Stages
-1. **Spice mix** – meat weight, EcoCure Yes/No, blend → planned grams; actual amounts editable; *Done* locks them.
-2. **Cure** – equilibrium dry cure in a vacuum bag. Days = genuineideas formula `1.25 × inches²` (flat; ÷2 tubular) + 20 %, rounded up, from the exact thickness.
-3. **Dry** – wrap + net; weigh-ins are gross, packaging weight (tare) stored once; target % per project.
-4. **Equalise** (backlog, hidden) – vacuum-sealed rest after the target weight. Switch on with `BRESAOLA_EQUALISE=1`.
-5. **Close** – final notes → PDF → read-only.
+## Steps (journey rail at the top; a next-action card says what to do today)
+1. **Day 0: spice and bag** – meat weight, EcoCure on/off, blend → planned grams, actual amounts; measure the piece and seal the bag (cure time shown live). *Done* locks day 0 and starts the cure.
+2. **Cure** – equilibrium dry cure in a vacuum bag. Days = genuineideas formula `1.25 × inches²` (flat; ÷2 tubular) + 20 %, rounded up. Enter the out-of-bag date; *Done* locks it and opens drying.
+3. **Dry** – weigh-in first; weights are gross (wrap + net), tare stored once; target % per project; progress, chart, ETA. *Done* locks drying.
+4. **Finish** – result summary, close the batch (read-only; PDF later), all photos by step, history, rename, delete.
+
+Every step has the same blocks: work → journal (notes + photos, allowed after locking) → Done / unlock with a reason.
+Equalise (vacuum-sealed rest after drying) is in the backlog: database code and tests exist, no screen.
 
 ## Layout
 ```
