@@ -2,13 +2,15 @@
 
 Records home-cured bresaola batches from spice mix to slicing: calculated amounts, cure time, weigh-ins, chamber temperature/humidity and photos, then a PDF summary when the batch is closed.
 
-**Status: v0.3.0 — journey layout: one screen per step, Done locks the step and jumps to the next. PDF export not yet built.**
+**Status: v0.3.1 — journey layout: one screen per step, Done locks the step and jumps to the next. PDF export not yet built.**
 
 ## Steps (journey rail at the top; a next-action card says what to do today)
 1. **Day 0: spice and bag** – meat weight, EcoCure on/off, blend → planned grams, actual amounts; measure the piece and seal the bag (cure time shown live). *Done* locks day 0 and starts the cure.
 2. **Cure** – equilibrium dry cure in a vacuum bag. Days = genuineideas formula `1.25 × inches²` (flat; ÷2 tubular) + 20 %, rounded up. Enter the out-of-bag date; *Done* locks it and opens drying.
 3. **Dry** – weigh-in first; weights are gross (wrap + net), tare stored once; target % per project; progress, chart, ETA. *Done* locks drying.
-4. **Finish** – result summary, close the batch (read-only; PDF later), all photos by step, history, rename, delete.
+4. **Finish** – result summary, close the batch (read-only; PDF later), all photos by step, history.
+
+Rename or delete a project from the "Rename or delete" menu under the project list. Under each step, a status line shows DONE / NOW / NEXT; the "Weigh today" reminder appears only when the last weigh-in is 7 or more days old.
 
 Every step has the same blocks: work → journal (notes + photos, allowed after locking) → Done / unlock with a reason.
 Equalise (vacuum-sealed rest after drying) is in the backlog: database code and tests exist, no screen.

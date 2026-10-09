@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import altair as alt
 import pandas as pd
@@ -30,7 +30,9 @@ st.markdown(f"""<style>
 section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {{ height: 2.25rem; padding: .5rem 1rem 0; }}
 section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{ padding-top: 0; }}
 section[data-testid="stSidebar"] h1 {{ padding-top: 0; }}
-.block-container {{ padding-top: 2.5rem; max-width: 1150px; }}
+.block-container {{ padding-top: 1.2rem; max-width: 1150px; }}
+.block-container h2 {{ padding-top: 0; }}
+section[data-testid="stSidebar"] .st-key-testmode [data-testid="stAlert"] p {{ font-size: .82rem; }}
 
 /* journey rail */
 .st-key-rail [data-testid="stHorizontalBlock"] {{ gap: .5rem; }}
@@ -38,7 +40,16 @@ section[data-testid="stSidebar"] h1 {{ padding-top: 0; }}
   justify-content: flex-start; text-align: left; border: 1px solid #d9d4d0; background: #fff; color: #8a8480; }}
 .st-key-rail button p {{ font-weight: 500; font-size: .98rem; text-align: left; line-height: 1.25; }}
 .st-key-rail button:hover {{ border-color: {RED}; color: {RED}; }}
-.rail-sub {{ font-size: .78rem; color: {MUTED}; margin: .25rem 0 0 .2rem; }}
+.stat {{ margin: .4rem .1rem 0; line-height: 1.35; }}
+.stat .tag {{ display:inline-block; font-size:.68rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+  padding:.12rem .45rem; border-radius:4px; margin-right:.35rem; vertical-align:1px; }}
+.stat .main {{ font-size:.86rem; font-weight:600; color:{INK}; }}
+.stat .more {{ display:block; font-size:.8rem; color:{MUTED}; margin-top:.1rem; }}
+.stat .more.due {{ color:{RED}; font-weight:600; }}
+.stat.done .tag {{ background:{GREEN_BG}; color:{GREEN}; border:1px solid #c9dacb; }}
+.stat.now .tag {{ background:{RED}; color:#fff; }}
+.stat.wait .tag {{ background:#f1efee; color:#8a8480; }}
+.stat.wait .main {{ color:#8a8480; font-weight:500; }}
 
 /* bands: summary figures at the top of each step */
 .band {{ border:1px solid {LINE}; border-radius:10px; padding:1rem 1.25rem .9rem; margin: .25rem 0 1rem; }}
@@ -142,6 +153,27 @@ with st.sidebar:
         pid = st.selectbox("Project", ids, index=ids.index(default) if default in ids else 0,
                            format_func=labels.get)
         st.session_state["pid"] = pid
+        sp = db.project(con, pid)
+        with st.popover("Rename or delete", icon=":material/more_horiz:", width="stretch"):
+            st.markdown("**Rename**")
+            new_name = st.text_input("New name", value=sp["name"], key=f"rn{pid}",
+                                     help="The date in front comes from the start date and is added automatically.")
+            if st.button("Rename", disabled=sp["status"] == "closed" or new_name.strip() in ("", sp["name"]),
+                         key=f"rnb{pid}", width="stretch"):
+                act(db.rename_project, pid, new_name, success="Renamed")
+            st.divider()
+            st.markdown("**Delete**")
+            st.caption("Removes this project, its weigh-ins and photos for good. The drying chamber and its "
+                       "readings stay. Download a backup first if you might want it back.")
+            confirm = st.text_input(f"Type **{sp['name']}** to confirm", key=f"del{pid}")
+            if st.button("Delete project permanently", disabled=confirm.strip() != sp["name"],
+                         key=f"delb{pid}", width="stretch"):
+                with con:
+                    db.delete_project(con, pid)
+                storage.delete_project_photos(pid)
+                st.session_state.pop("pid", None)
+                st.session_state["flash"] = f"Deleted {sp['name']}"
+                st.rerun()
     else:
         pid = None
 
@@ -184,14 +216,14 @@ with st.sidebar:
                 except Exception as e:
                     st.session_state["flash_error"] = f"Restore failed, your data is unchanged: {e}"
                 st.rerun()
+    if storage.is_test_mode():
+        with st.container(key="testmode"):
+            st.warning("**Test mode.** Nothing here is stored permanently. Use *Download backup* "
+                       "above to keep anything you enter.", icon="⚠️")
 
 # --------------------------------------------------------------------------- #
 # header
 # --------------------------------------------------------------------------- #
-
-if storage.is_test_mode():
-    st.warning("**Test mode.** Nothing here is stored permanently. Use *Download backup* in the "
-               "sidebar to keep anything you enter.", icon="⚠️")
 
 if msg := st.session_state.pop("flash", None):
     st.toast(msg, icon=":material/check_circle:")
@@ -222,22 +254,61 @@ done = {"day0": bool(p["spice_locked_at"]), "cure": bool(p["cure_locked_at"]),
 current = next((s for s in STEPS if not done[s]), "finish")
 
 
-def step_sub(s: str) -> str:
+WEIGH_EVERY = 7          # days; weigh-ins are roughly weekly, the reminder shows after 6 days
+
+
+def short(dt) -> str:
+    return f"{dt.day} {dt:%b}"
+
+
+def step_status(s: str) -> tuple[str, str, str, bool]:
+    """(state, main line, second line, second line is a warning) for the status under a rail button.
+    state: done, now (the step to work on) or wait."""
+    state = "done" if done[s] else ("now" if s == current else "wait")
+    today = db.today()
     if s == "day0":
-        return f"{fmt_date(p['start_date'])}" + (", done" if done[s] else "")
+        if done[s]:
+            return state, short(d(p["start_date"])) + " " + d(p["start_date"]).strftime("%Y"), "spiced and bagged", False
+        return state, f"started {short(d(p['start_date']))}", "spice, measure, bag", False
     if s == "cure":
-        if p["cure_end_actual"]:
-            return f"{(d(p['cure_end_actual']) - d(p['cure_start'])).days} days, done" if done[s] else \
-                f"out of the bag {fmt_date(p['cure_end_actual'])}"
-        if p["cure_start"] and p["thickness_cm"]:
-            return f"{calc.cure_days(p['thickness_cm'], p['shape'])} days planned"
-        return "after day 0"
+        if done[s] and p["cure_end_actual"]:
+            n = (d(p["cure_end_actual"]) - d(p["cure_start"])).days
+            return state, f"{n} days in the bag", f"out {short(d(p['cure_end_actual']))}", False
+        if state == "now" and p["cure_start"] and p["thickness_cm"]:
+            planned = calc.cure_end_date(d(p["cure_start"]), p["thickness_cm"], p["shape"])
+            day = (today - d(p["cure_start"])).days
+            total = calc.cure_days(p["thickness_cm"], p["shape"])
+            return state, f"day {day} of {total}", f"out of the bag {short(planned)}", planned <= today
+        return state, "starts after day 0", "", False
     if s == "dry":
-        if p["dry_start"]:
-            days = ((d(p["dry_end"]) if p["dry_end"] else db.today()) - d(p["dry_start"])).days
-            return f"day {days}" + (", done" if done[s] else "")
-        return "after the cure"
-    return "closed" if closed else "when the target is reached"
+        if not p["dry_start"]:
+            return state, ("wrap, net, weigh" if state == "now" else "starts after the cure"), "", False
+        st_ = db.drying_status(con, pid)
+        lost = calc.loss_pct(p["dry_start_gross_g"], st_["latest_gross_g"], p["tare_g"])
+        end = d(p["dry_end"]) if p["dry_end"] else today
+        main = f"day {(end - d(p['dry_start'])).days} · {lost:.1f} % of {p['target_loss_pct']:.0f} % lost"
+        if done[s]:
+            return state, main, "target reached" if st_["progress"] >= 1 else "ended", False
+        last = db.readings(con, pid)[-1][0]
+        due = last + timedelta(days=WEIGH_EVERY)
+        if due <= today:
+            return state, main, "weigh-in due", True
+        return state, main, f"next weigh-in by {short(due)}", False
+    if closed:
+        return state, f"closed {short(d(p['closed_at'][:10]))}", "read-only", False
+    if state == "now":
+        return state, "tasting notes", "then close the batch", False
+    return state, "after drying", f"at {p['target_loss_pct']:.0f} % weight loss" if p["dry_start"] else "", False
+
+
+STATE_LABEL = {"done": "Done", "now": "Now", "wait": "Next"}
+
+
+def status_html(s: str) -> str:
+    state, main, more, warn = step_status(s)
+    more_html = f'<span class="more{" due" if warn else ""}">{more}</span>' if more else ""
+    return (f'<div class="stat {state}"><span class="tag">{STATE_LABEL[state]}</span>'
+            f'<span class="main">{main}</span>{more_html}</div>')
 
 
 step_key = f"step{pid}"
@@ -255,7 +326,7 @@ with st.container(key="rail"):
             if st.button(f"{icon} {i + 1}. {TITLE[s]}", key=f"rail_{s}", width="stretch"):
                 st.session_state[step_key] = s
                 st.rerun()
-            st.markdown(f'<div class="rail-sub">{step_sub(s)}</div>', unsafe_allow_html=True)
+            st.markdown(status_html(s), unsafe_allow_html=True)
         k = f".st-key-rail_{s} button"
         # state colour (done = green, current = red outline) is kept when viewing;
         # the step you are looking at gets a heavy underline-shadow and bold text
@@ -271,8 +342,9 @@ with st.container(key="rail"):
     st.markdown("<style>" + "\n".join(css) + "</style>", unsafe_allow_html=True)
 
 
-def next_action() -> tuple[str, bool]:
-    """(sentence, is_all_done) describing what to do now for the whole batch."""
+def next_action() -> tuple[str | None, bool]:
+    """(sentence, is_all_done) describing what to do now for the whole batch.
+    sentence is None when there is nothing to do today (drying, weighed within the week)."""
     if closed:
         return "This batch is closed. Everything is read-only.", True
     if current == "day0":
@@ -294,18 +366,21 @@ def next_action() -> tuple[str, bool]:
         s_ = db.drying_status(con, pid)
         if s_["progress"] >= 1:
             return "<b>Target weight reached.</b> Enter the end date and press <b>Done</b>.", False
+        if ago < WEIGH_EVERY:
+            return None, False
         return (f"<b>Weigh today.</b> Last weigh-in {ago} day{'s' if ago != 1 else ''} ago "
                 f"({s_['latest_gross_g']:.0f} g, {min(s_['progress'], 1)*100:.0f} % of the way).", False)
     return "<b>Finish:</b> write your tasting notes and close the batch.", False
 
 
 txt, all_done = next_action()
-go_btn = sel != current and not closed
-nc1, nc2 = st.columns([5, 1], vertical_alignment="center") if go_btn else (st.container(), None)
-nc1.markdown(f'<div class="next{" done" if all_done else ""}">{txt}</div>', unsafe_allow_html=True)
-if go_btn and nc2.button(f"Go to {TITLE[current].split(':')[0]}", key="go_current", width="stretch"):
-    st.session_state[step_key] = current
-    st.rerun()
+if txt:
+    go_btn = sel != current and not closed
+    nc1, nc2 = st.columns([5, 1], vertical_alignment="center") if go_btn else (st.container(), None)
+    nc1.markdown(f'<div class="next{" done" if all_done else ""}">{txt}</div>', unsafe_allow_html=True)
+    if go_btn and nc2.button(f"Go to {TITLE[current].split(':')[0]}", key="go_current", width="stretch"):
+        st.session_state[step_key] = current
+        st.rerun()
 
 
 # --------------------------------------------------------------------------- #
@@ -877,22 +952,7 @@ def step_finish():
         st.dataframe(pd.DataFrame([{"When": e["ts"].replace("T", " "), "What": e["kind"].replace("_", " "),
                                     "Detail": e["detail"] or ""} for e in ev]),
                      hide_index=True, width="stretch")
-    with st.expander("Rename project"):
-        new_name = st.text_input("Name", value=p["name"], key=f"rn{pid}",
-                                 help="The date in front comes from the start date and is added automatically.")
-        if st.button("Rename", disabled=closed or new_name.strip() in ("", p["name"]), key=f"rnb{pid}"):
-            act(db.rename_project, pid, new_name, success="Renamed")
-    with st.expander("Delete project"):
-        st.warning("Deletes this project, its weigh-ins and photos for good. The drying chamber and its "
-                   "temperature/humidity readings stay. Download a backup first if you might want it back.")
-        confirm = st.text_input(f"Type the project name to confirm: **{p['name']}**", key=f"del{pid}")
-        if st.button("Delete project permanently", disabled=confirm.strip() != p["name"]):
-            with con:
-                db.delete_project(con, pid)
-            storage.delete_project_photos(pid)
-            st.session_state.pop("pid", None)
-            st.session_state["flash"] = f"Deleted {p['name']}"
-            st.rerun()
+    st.caption("Rename or delete the project from the menu under the project list in the sidebar.")
 
 
 {"day0": step_day0, "cure": step_cure, "dry": step_dry, "finish": step_finish}[sel]()

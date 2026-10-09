@@ -30,6 +30,17 @@ def app(tmp_path, monkeypatch):
     return at
 
 
+def at_date(tmp_path, monkeypatch, day):
+    """App with the demo, as if today were `day` (the demo's last weigh-in is 8 Oct 2026)."""
+    monkeypatch.setenv("BRESAOLA_DATA", str(tmp_path))
+    monkeypatch.delenv("BRESAOLA_MODE", raising=False)
+    monkeypatch.setattr(db, "today", lambda: day)
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    assert not at.exception, at.exception
+    return at
+
+
 def ok(at):
     assert not at.exception, at.exception
 
@@ -82,18 +93,35 @@ def test_demo_opens_on_current_step_dry(app):
     assert app.header[0].value == "26/08/15 Palermo Spicy"
     m = metrics(app)
     assert m["Target weight"] == "1365 g" and m["Latest weight"] == "1963 g"
-    assert "Weigh today." in html(app)
+    assert any("Test mode" in w.value for w in app.sidebar.warning)     # banner lives in the sidebar
     assert [b.key for b in app.button if b.key and b.key.startswith("rail_")] == \
         ["rail_day0", "rail_cure", "rail_dry", "rail_finish"]
 
 
-def test_rail_navigation_and_go_back_button(app):
+def test_rail_navigation_and_go_back_button(tmp_path, monkeypatch):
+    app = at_date(tmp_path, monkeypatch, date(2026, 10, 15))     # weigh-in due: card with a way back
     goto(app, "day0")
     assert metrics(app)["Total planned [g]"] == "126.3"
     assert metrics(app)["Total actual [g]"] == "120.1"
-    btn(app, "Go to Dry").click()            # next-action card offers a way back
+    btn(app, "Go to Dry").click()
     app.run(); ok(app)
     assert "Latest weight" in metrics(app)
+
+
+def test_weigh_reminder_only_after_six_days(tmp_path, monkeypatch):
+    app = at_date(tmp_path, monkeypatch, date(2026, 10, 14))     # 6 days after the last weigh-in
+    h = html(app)
+    assert "Weigh today." not in h and "next weigh-in by 15 Oct" in h
+    app = at_date(tmp_path / "b", monkeypatch, date(2026, 10, 15))   # 7 days
+    h = html(app)
+    assert "Weigh today." in h and "weigh-in due" in h
+
+
+def test_rail_status_lines(tmp_path, monkeypatch):
+    h = html(at_date(tmp_path, monkeypatch, date(2026, 10, 9)))
+    for text in ('class="stat done"', "spiced and bagged", "36 days in the bag", "out 20 Sep",
+                 'class="stat now"', "day 19 · 6.5 % of 35 % lost", 'class="stat wait"', "after drying"):
+        assert text in h, text
 
 
 # ---------------- day 0 ----------------
@@ -238,9 +266,16 @@ def test_finish_close_needs_all_locked(app):
     assert btn(app, "Close project").disabled
 
 
+def test_rename_from_sidebar_menu(app):
+    next(t for t in app.text_input if t.key == "rn1").input("Palermo Hot")
+    app.run()
+    btn(app, "Rename").click()
+    app.run(); ok(app)
+    assert app.header[0].value == "26/08/15 Palermo Hot"
+
+
 def test_rename_to_existing_name_shows_message(app):
     new_project(app, "Rome")
-    goto(app, "finish")
     next(t for t in app.text_input if t.key and t.key.startswith("rn")).input("Palermo Spicy")
     app.run()
     btn(app, "Rename").click()
@@ -249,10 +284,9 @@ def test_rename_to_existing_name_shows_message(app):
 
 
 def test_delete_project_needs_exact_name(app):
-    goto(app, "finish")
     b = lambda: btn(app, "Delete project permanently")
     assert b().disabled
-    next(t for t in app.text_input if t.label.startswith("Type the project name")).input("Palermo Spicy")
+    next(t for t in app.text_input if t.key == "del1").input("Palermo Spicy")
     app.run()
     b().click()
     app.run(); ok(app)
