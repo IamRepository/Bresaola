@@ -30,7 +30,7 @@ st.markdown(f"""<style>
 section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {{ height: 2.25rem; padding: .5rem 1rem 0; }}
 section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{ padding-top: 0; }}
 section[data-testid="stSidebar"] h1 {{ padding-top: 0; }}
-.block-container {{ padding-top: 1.2rem; max-width: 1150px; }}
+.block-container {{ padding-top: 4rem; max-width: 1150px; }}   /* Streamlit top bar is 3.75rem and sits over the page */
 .block-container h2 {{ padding-top: 0; }}
 section[data-testid="stSidebar"] .st-key-testmode [data-testid="stAlert"] p {{ font-size: .82rem; }}
 
