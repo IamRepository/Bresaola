@@ -76,15 +76,15 @@ with st.sidebar:
         with st.form("new_project", clear_on_submit=True):
             name = st.text_input("Name", placeholder="e.g. Valtellina Nov 2026")
             blend = st.selectbox("Spice blend", list(BLENDS))
-            weight = st.number_input("Meat weight after trimming (g)", min_value=1.0, value=2000.0, step=1.0)
-            eco = st.toggle("EcoCure #2 used")
+            weight = st.number_input("Meat weight after trimming [g]", min_value=1.0, value=2000.0, step=1.0)
+            st.caption("EcoCure and the actual amounts are set in the Spice mix step.")
             if st.form_submit_button("Create project", type="primary"):
                 if not name.strip():
                     st.error("Give the project a name")
                 else:
                     try:
                         with con:
-                            new = db.create_project(con, name.strip(), blend, eco, weight)
+                            new = db.create_project(con, name.strip(), blend, False, weight)
                         st.session_state["pid"] = new
                         st.rerun()
                     except Exception as e:  # unique name etc.
@@ -94,11 +94,11 @@ with st.sidebar:
     st.subheader("Backup")
     st.download_button("Download backup", storage.make_backup(),
                        file_name=f"bresaola-backup-{db.today().isoformat()}.zip",
-                       mime="application/zip", use_container_width=True)
-    with st.popover("Restore backup", use_container_width=True):
+                       mime="application/zip", width="stretch")
+    with st.popover("Restore backup", width="stretch"):
         st.caption("Replaces **all** projects and photos with the contents of the backup.")
         up = st.file_uploader("Backup file (.zip)", type="zip", key="restore")
-        if st.button("Replace all data", type="primary", disabled=up is None, use_container_width=True):
+        if st.button("Replace all data", type="primary", disabled=up is None, width="stretch"):
             con.close()
             try:
                 storage.restore_backup(up.getvalue())
@@ -128,9 +128,11 @@ if pid is None:
 p = db.project(con, pid)
 closed = p["status"] == "closed"
 st.header(p["name"])
-st.caption(f"{p['blend']} · EcoCure {'yes' if p['ecocure'] else 'no'} · "
-           f"{p['green_weight_g']:.0f} g green weight · created {p['created_at'][:10]}"
-           + (f" · **closed {p['closed_at'][:10]}**" if closed else ""))
+facts = [p["blend"], f"{p['green_weight_g']:.0f} g raw meat after trimming",
+         "EcoCure #2" if p["ecocure"] else "no EcoCure", f"started {d(p['created_at'][:10]):%d %b %Y}"]
+if closed:
+    facts.append(f"closed {d(p['closed_at'][:10]):%d %b %Y}")
+st.caption(",  ".join(facts))
 
 # --- stage track: tabs styled as a sequence of pills showing where the batch is ---
 ICON = {"done": ":material/check_circle:", "current": ":material/radio_button_checked:",
@@ -146,7 +148,7 @@ st.markdown(f"""
 <style>
 div[role="tablist"] {{ gap: .45rem; flex-wrap: wrap; padding: .25rem 0 .9rem; border: none; box-shadow: none; }}
 div[role="tablist"]::after, .react-aria-SelectionIndicator {{ display: none !important; }}
-{T} {{ height: auto; padding: .45rem 1rem; margin: 0; border-radius: 999px;
+{T} {{ height: auto; padding: .5rem 1.05rem; margin: 0; border-radius: 6px;
       border: 1px solid #d9d4d0; background: #fff; color: #4a4542; box-shadow: none; }}
 {T}::after, {T}::before {{ display: none; }}
 {T} p {{ font-size: .95rem; font-weight: 500; color: inherit; }}
@@ -173,62 +175,114 @@ with tabs[0]:
     locked = bool(p["spice_locked_at"]) or closed
     lines = db.ingredient_lines(con, pid)
 
-    if not locked:
-        c1, c2, c3 = st.columns([2, 2, 1])
-        new_w = c1.number_input("Meat weight after trimming (g)", min_value=1.0,
-                                value=float(p["green_weight_g"]), step=1.0, key=f"w{pid}")
-        new_b = c2.selectbox("Blend", list(BLENDS), index=list(BLENDS).index(p["blend"]), key=f"b{pid}")
-        new_e = c3.toggle("EcoCure #2", value=bool(p["ecocure"]), key=f"e{pid}")
-        if new_b != p["blend"]:
-            act(db.change_blend, pid, new_b, success=f"Blend changed to {new_b}")
-        elif new_w != p["green_weight_g"] or new_e != bool(p["ecocure"]):
-            act(db.update_spice_inputs, pid, green_weight_g=new_w, ecocure=new_e,
-                success="Plan recalculated (actual amounts reset to plan)")
-        st.caption("Changing weight, blend or EcoCure recalculates the plan and resets actual amounts.")
+    # --- recipe settings: drive every planned amount ---------------------- #
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([3, 2, 2], vertical_alignment="bottom")
+        new_b = c1.selectbox("Blend", list(BLENDS), index=list(BLENDS).index(p["blend"]),
+                             key=f"b{pid}", disabled=locked)
+        new_w = c2.number_input("Meat weight after trimming [g]", min_value=1.0, step=1.0, format="%.0f",
+                                value=float(p["green_weight_g"]), key=f"w{pid}", disabled=locked)
+        new_e = c3.toggle("EcoCure #2", value=bool(p["ecocure"]), key=f"e{pid}", disabled=locked,
+                          help="Adds 1 % EcoCure #2 and lowers the salt by half its weight, "
+                               "so total salt stays at 3 %.")
+        if not locked:
+            if new_b != p["blend"]:
+                act(db.change_blend, pid, new_b, success=f"Blend changed to {new_b}")
+            elif new_w != p["green_weight_g"] or new_e != bool(p["ecocure"]):
+                act(db.update_spice_inputs, pid, green_weight_g=new_w, ecocure=new_e,
+                    success="Plan recalculated; actual amounts reset to the plan")
+            st.caption("Changing blend, weight or EcoCure recalculates the plan and resets actual amounts.")
+        elif not closed:
+            st.caption("Locked. Unlock below to change blend, weight or EcoCure.")
 
-    df = pd.DataFrame([{
-        "Ingredient": l["name"],
-        "Rate": f"{l['rate']*100:.3g} %" if l["unit"] == "pct" else f"{l['rate']:g} per kg",
-        "Unit": "g" if l["unit"] == "pct" else "pcs",
-        "Plan": round(l["planned"], 2),
-        "Actual": None if l["actual"] is None else round(l["actual"], 2),
-        "Note": l["note"] or "",
-    } for l in lines])
+    # --- tables: weighed [g] and counted [pcs] ---------------------------- #
+    centre = dict(alignment="center")
+    def table(rows, unit_rate, unit_qty, key):
+        df = pd.DataFrame([{
+            "Ingredient": l["name"],
+            f"Rate [{unit_rate}]": f"{l['rate']*100:.3g}" if l["unit"] == "pct" else f"{l['rate']:g}",
+            f"Plan [{unit_qty}]": float(l["planned"]),
+            f"Actual [{unit_qty}]": None if l["actual"] is None else float(l["actual"]),
+            "Note": l["note"] or "",
+        } for l in rows])
+        fmt = "%.2f" if unit_qty == "g" else "%d"
+        return st.data_editor(
+            df, hide_index=True, width="stretch", disabled=locked, key=key,
+            column_config={
+                "Ingredient": st.column_config.TextColumn(disabled=True, width="medium"),
+                f"Rate [{unit_rate}]": st.column_config.TextColumn(disabled=True, width="small", **centre),
+                f"Plan [{unit_qty}]": st.column_config.NumberColumn(disabled=True, format=fmt, width="small", **centre),
+                f"Actual [{unit_qty}]": st.column_config.NumberColumn(format=fmt, min_value=0.0, width="small", **centre),
+                "Note": st.column_config.TextColumn(width="large", **centre),
+            })
 
-    edited = st.data_editor(
-        df, hide_index=True, use_container_width=True, disabled=locked,
-        column_config={c: st.column_config.Column(disabled=True) for c in ["Ingredient", "Rate", "Unit", "Plan"]},
-        key=f"spice{pid}{p['spice_locked_at']}")
+    weighed = [l for l in lines if l["unit"] == "pct"]
+    counted = [l for l in lines if l["unit"] == "per_kg"]
+    ver = p["spice_locked_at"] or ""
+    ed_w = table(weighed, "%", "g", f"sw{pid}{ver}{p['ecocure']}{p['green_weight_g']}")
+    ed_c = table(counted, "pcs / kg", "pcs", f"sc{pid}{ver}{p['green_weight_g']}") if counted else None
 
-    plan_g = sum(l["planned"] for l in lines if l["unit"] == "pct")
-    act_g = sum(r["Actual"] or 0 for _, r in edited.iterrows() if r["Unit"] == "g")
-    m1, m2 = st.columns(2)
-    m1.metric("Total planned (g)", f"{plan_g:.1f}")
-    m2.metric("Total actual (g)", f"{act_g:.1f}", delta=f"{act_g - plan_g:+.1f} g", delta_color="off")
+    def edited_actuals():
+        out = []
+        for rows, ed, u in ((weighed, ed_w, "g"), (counted, ed_c, "pcs")):
+            if ed is None:
+                continue
+            for l, (_, r) in zip(rows, ed.iterrows()):
+                a = r[f"Actual [{u}]"]
+                out.append((l, None if pd.isna(a) else float(a), r["Note"] or None))
+        return out
+
+    acts = edited_actuals()
+    weight = p["green_weight_g"]
+    plan_g = sum(l["planned"] for l in weighed)
+    act_g = sum(a or 0 for l, a, _ in acts if l["unit"] == "pct")
+    plan_mix = calc.mix_summary([(l["name"], l["unit"], l["planned"]) for l in lines], weight)
+    act_mix = calc.mix_summary([(l["name"], l["unit"], a) for l, a, _ in acts], weight)
+
+    # --- what it adds up to ------------------------------------------------ #
+    with st.container(border=True):
+        cols = st.columns(6 if p["ecocure"] else 5)
+        cols[0].metric("Total planned [g]", f"{plan_g:.1f}")
+        cols[1].metric("Total actual [g]", f"{act_g:.1f}", delta=f"{act_g - plan_g:+.1f} g", delta_color="off")
+        cols[2].metric("Salt [% of meat]", f"{act_mix.salt_pct:.2f}",
+                       delta=f"{act_mix.salt_pct - plan_mix.salt_pct:+.2f} vs plan", delta_color="off",
+                       help="Kosher salt plus the salt inside EcoCure #2 (half its weight), "
+                            "divided by the meat weight. Plan is 3.00.")
+        i = 3
+        if p["ecocure"]:
+            cols[i].metric("EcoCure [% of meat]", f"{act_mix.ecocure_pct:.2f}",
+                           delta=f"{act_mix.ecocure_pct - plan_mix.ecocure_pct:+.2f} vs plan", delta_color="off")
+            i += 1
+        cols[i].metric("Sugar [% of meat]", f"{act_mix.sugar_pct:.2f}")
+        cols[i + 1].metric("Spices [% of meat]", f"{act_mix.seasoning_pct:.2f}",
+                           help="All weighed ingredients except salt, EcoCure and sugar.")
+        off = calc.off_plan([(l["name"], l["planned"], a) for l, a, _ in acts])
+        if off:
+            st.caption("More than 10 % off plan: " +
+                       ", ".join(f"{n} ({dv*100:+.0f} %)" for n, dv in off))
+
+    # --- actions ------------------------------------------------------------ #
+    def save_actuals():
+        for l, a, note in acts:
+            db.set_actual(con, pid, l["position"], a, note)
 
     if closed:
         pass
     elif not p["spice_locked_at"]:
-        b1, b2 = st.columns([1, 4])
-        if b1.button("Save actual amounts"):
+        b1, b2, _ = st.columns([1.2, 1.6, 4])
+        if b1.button("Save actual amounts", width="stretch"):
             with con:
-                for i, row in edited.iterrows():
-                    a = row["Actual"]
-                    db.set_actual(con, pid, lines[i]["position"],
-                                  None if pd.isna(a) else float(a), row["Note"] or None)
-            st.session_state["flash"] = "Saved"
+                save_actuals()
+            st.session_state["flash"] = "Actual amounts saved"
             st.rerun()
-        if b2.button("Done: lock spice mix", type="primary"):
+        if b2.button("Done: lock spice mix", type="primary", width="stretch"):
             with con:
-                for i, row in edited.iterrows():
-                    a = row["Actual"]
-                    db.set_actual(con, pid, lines[i]["position"],
-                                  None if pd.isna(a) else float(a), row["Note"] or None)
+                save_actuals()
                 db.lock_spice(con, pid)
             st.session_state["flash"] = "Spice mix locked"
             st.rerun()
     else:
-        st.info(f"Locked {p['spice_locked_at'].replace('T', ' ')}.")
+        st.caption(f"Locked on {p['spice_locked_at'][:16].replace('T', ' at ')}.")
         with st.expander("Unlock to edit"):
             reason = st.text_input("Reason (saved in history)", key=f"unl{pid}")
             if st.button("Unlock spice mix", disabled=not reason.strip()):
@@ -275,10 +329,10 @@ with tabs[1]:
                              key=k + "shape", disabled=closed,
                              help="Tubular: eye of round, tenderloin. Flat: brisket.")
         c1, c2 = st.columns(2)
-        c1.number_input("Thickness (cm)", min_value=0.5, step=0.5, format="%.1f",
+        c1.number_input("Thickness [cm]", min_value=0.5, step=0.5, format="%.1f",
                         value=float(p["thickness_cm"] or 8.0), key=k + "thick", disabled=closed,
                         help="Narrowest dimension across the thickest part. This sets the cure time.")
-        length = c2.number_input("Length (cm)", min_value=0.0, step=0.5, format="%.1f",
+        length = c2.number_input("Length [cm]", min_value=0.0, step=0.5, format="%.1f",
                                  value=float(p["length_cm"]) if p["length_cm"] else None,
                                  placeholder="optional", key=k + "len", disabled=closed,
                                  help="Used only to check the measurements against the weight.")
@@ -331,11 +385,11 @@ with tabs[2]:
         with st.form(f"drystart{pid}"):
             c1, c2, c3 = st.columns(3)
             ds = c1.date_input("Drying start", value=d(p["cure_end_actual"]) or db.today(), format="DD/MM/YYYY")
-            sg = c2.number_input("Start weight incl. wrap + net (g)", min_value=1.0,
+            sg = c2.number_input("Start weight incl. wrap + net [g]", min_value=1.0,
                                  value=float(p["green_weight_g"]), step=1.0)
-            tp = c3.number_input("Target loss (%)", min_value=1.0, max_value=70.0, value=35.0, step=1.0)
+            tp = c3.number_input("Target loss [%]", min_value=1.0, max_value=70.0, value=35.0, step=1.0)
             c4, c5 = st.columns(2)
-            tare = c4.number_input("Packaging weight: wrap + net (g)", min_value=0.0, value=0.0, step=1.0)
+            tare = c4.number_input("Packaging weight: wrap + net [g]", min_value=0.0, value=0.0, step=1.0)
             tare_est = c5.checkbox("Packaging weight is an estimate", value=True)
             names = [c["name"] for c in db.chambers(con)]
             ch_name = st.selectbox("Drying chamber", names + ["+ New chamber"]) if names else "+ New chamber"
@@ -365,17 +419,17 @@ with tabs[2]:
         rdf = pd.DataFrame([{"Date": pd.Timestamp(r["day"]), "Weight (g)": r["gross_g"]} for r in rows])
         base = alt.Chart(rdf).encode(x=alt.X("Date:T", title=None))
         line = base.mark_line(point=True).encode(
-            y=alt.Y("Weight (g):Q", title="Weight incl. wrap + net (g)", scale=alt.Scale(zero=False,
+            y=alt.Y("Weight (g):Q", title="Weight incl. wrap + net [g]", scale=alt.Scale(zero=False,
                     domain=[s["target_gross_g"] * 0.97, s["start_gross_g"] * 1.01])),
             tooltip=[alt.Tooltip("Date:T", format="%d %b %Y"), "Weight (g):Q"])
         target = alt.Chart(pd.DataFrame({"t": [s["target_gross_g"]]})).mark_rule(
-            strokeDash=[6, 4], color="#b5543c").encode(y=alt.Y("t:Q", title="Weight incl. wrap + net (g)"))
+            strokeDash=[6, 4], color="#b5543c").encode(y=alt.Y("t:Q", title="Weight incl. wrap + net [g]"))
         layers = [line, target]
         if p["chamber_id"]:
             cr = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"])
             if cr:
                 cdf = pd.DataFrame([{"Time": pd.Timestamp(c["ts"]), "°C": c["temp_c"], "RH %": c["rh_pct"]} for c in cr])
-        st.altair_chart(alt.layer(*layers).properties(height=320), use_container_width=True)
+        st.altair_chart(alt.layer(*layers).properties(height=320), width="stretch")
         if p["chamber_id"] and cr:
             with st.expander("Chamber temperature and humidity"):
                 st.line_chart(cdf.set_index("Time"), height=200)
@@ -386,11 +440,11 @@ with tabs[2]:
             with st.form(f"reading{pid}", clear_on_submit=True):
                 c1, c2 = st.columns(2)
                 rd = c1.date_input("Date", value=db.today(), format="DD/MM/YYYY")
-                rw = c2.number_input("Weight incl. wrap + net (g)", min_value=1.0,
+                rw = c2.number_input("Weight incl. wrap + net [g]", min_value=1.0,
                                      value=float(s["latest_gross_g"]), step=1.0)
                 c3, c4 = st.columns(2)
-                rt = c3.number_input("Chamber temp (°C)", value=None, step=0.1, placeholder="optional")
-                rh = c4.number_input("Chamber humidity (%)", value=None, step=1.0, placeholder="optional")
+                rt = c3.number_input("Chamber temperature [°C]", value=None, step=0.1, placeholder="optional")
+                rh = c4.number_input("Chamber humidity [%]", value=None, step=1.0, placeholder="optional")
                 rn = st.text_input("Note", placeholder="optional: smell, firmness, mould ...")
                 ph = st.file_uploader("Photo", type=["jpg", "jpeg", "png", "webp"])
                 if st.form_submit_button("Save weigh-in", type="primary", disabled=closed):
@@ -414,10 +468,10 @@ with tabs[2]:
             st.subheader("Weigh-ins")
             tdf = pd.DataFrame([{
                 "Date": d(r["day"]).strftime("%d %b"), "Day": (d(r["day"]) - d(p["dry_start"])).days,
-                "Weight (g)": int(r["gross_g"]),
-                "Lost (%)": round(calc.loss_pct(s["start_gross_g"], r["gross_g"], p["tare_g"]), 1),
+                "Weight [g]": int(r["gross_g"]),
+                "Lost [%]": round(calc.loss_pct(s["start_gross_g"], r["gross_g"], p["tare_g"]), 1),
                 "Note": r["note"] or ""} for r in rows])
-            st.dataframe(tdf, hide_index=True, use_container_width=True, height=280)
+            st.dataframe(tdf, hide_index=True, width="stretch", height=280)
             if not closed and len(rows) > 1:
                 with st.expander("Delete a weigh-in"):
                     choice = st.selectbox("Weigh-in", [r["day"] for r in rows[1:]], format_func=fmt_date)
@@ -426,7 +480,7 @@ with tabs[2]:
 
         with st.expander("Settings: target, packaging, end of drying"):
             c1, c2 = st.columns(2)
-            nt = c1.number_input("Target loss (%)", min_value=1.0, max_value=70.0,
+            nt = c1.number_input("Target loss [%]", min_value=1.0, max_value=70.0,
                                  value=float(p["target_loss_pct"]), step=0.5, key=f"tgt{pid}")
             why = c2.text_input("Reason for change", key=f"why{pid}")
             if st.button("Change target", disabled=closed or nt == p["target_loss_pct"]):
@@ -452,7 +506,7 @@ with tabs[3]:
         es = c1.date_input("Start", value=d(p["equalise_start"]) or d(p["dry_end"]) or db.today(), format="DD/MM/YYYY")
         use_end = c2.checkbox("Finished", value=bool(p["equalise_end"]))
         ee = c2.date_input("End", value=d(p["equalise_end"]) or db.today(), format="DD/MM/YYYY")
-        ew = c3.number_input("Weight at end (g)", min_value=0.0, value=float(p["equalise_end_gross_g"] or 0), step=1.0)
+        ew = c3.number_input("Weight at end [g]", min_value=0.0, value=float(p["equalise_end_gross_g"] or 0), step=1.0)
         en = st.text_area("Notes", value=p["equalise_note"] or "", height=80)
         if st.form_submit_button("Save", type="primary", disabled=closed):
             act(db.set_equalise, pid, start=es if use_start else None, end=ee if use_end else None,
@@ -485,7 +539,7 @@ with tabs[4]:
         f = storage.photo_file(r["path"])
         with cols[i % 4]:
             if f.exists():
-                st.image(str(f), use_container_width=True)
+                st.image(str(f), width="stretch")
             else:
                 st.warning("File missing")
             st.caption(f"{fmt_date(r['taken_at'][:10])} · {r['caption'] or ''}")
@@ -514,7 +568,7 @@ with tabs[5]:
     ev = db.events(con, pid)
     st.dataframe(pd.DataFrame([{"When": e["ts"].replace("T", " "), "What": e["kind"].replace("_", " "),
                                 "Detail": e["detail"] or ""} for e in ev]),
-                 hide_index=True, use_container_width=True)
+                 hide_index=True, width="stretch")
 
     st.divider()
     with st.expander("Delete project"):

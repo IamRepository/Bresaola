@@ -120,3 +120,32 @@ def test_eta_is_downward_and_reasonable():
 
 def test_eta_none_when_not_losing_weight():
     assert calc.drying_eta([(date(2026, 1, 1), 100), (date(2026, 1, 2), 101)], 100, 35) is None
+
+
+# ---------------- mix summary ----------------
+
+def _tuples(lines, attr="planned"):
+    return [(l.name, l.unit, getattr(l, attr)) for l in lines]
+
+
+def test_salt_pct_is_three_with_or_without_ecocure():
+    for eco in (False, True):
+        s = calc.mix_summary(_tuples(calc.spice_plan(W, eco, CAL)), W)
+        assert s.salt_pct == pytest.approx(3.0)
+        assert s.ecocure_pct == pytest.approx(1.0 if eco else 0.0)
+
+
+def test_rome_classic_actuals():
+    # Rome Classic as entered: 1990 g, EcoCure 19.9, salt 50
+    lines = [("EcoCure #2", "pct", 19.9), ("Kosher salt, EcoCure #2 adjusted", "pct", 50),
+             ("Sugar, white granulated", "pct", 19.9), ("Black pepper, powder", "pct", 9),
+             ("Juniper berries, crushed", "per_kg", 4)]
+    s = calc.mix_summary(lines, 1990)
+    assert s.salt_pct == pytest.approx((50 + 9.95) / 19.9)     # 3.013 %
+    assert s.sugar_pct == pytest.approx(1.0)
+    assert s.seasoning_pct == pytest.approx(9 / 19.9)
+
+
+def test_off_plan_flags_beyond_10_percent():
+    flagged = calc.off_plan([("Rosemary", 1.99, 5), ("Salt", 49.75, 50), ("Thyme", 2.98, None)])
+    assert [n for n, _ in flagged] == ["Rosemary"]

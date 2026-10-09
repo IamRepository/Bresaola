@@ -70,6 +70,48 @@ def total_grams(lines, attr: str = "planned") -> float:
     return sum(getattr(l, attr) for l in lines if l.unit == "pct" and getattr(l, attr) is not None)
 
 
+SUGAR_WORDS = ("sugar", "turbinado")
+
+
+@dataclass(frozen=True)
+class MixSummary:
+    salt_pct: float        # salt incl. EcoCure's salt share, % of meat weight
+    ecocure_pct: float     # EcoCure, % of meat weight (0 if not used)
+    sugar_pct: float
+    seasoning_pct: float   # everything else weighed in grams, % of meat weight
+
+
+def mix_summary(lines: list[tuple[str, str, float | None]], weight_g: float) -> MixSummary:
+    """lines: (name, unit, grams). Count items (per_kg) are ignored."""
+    salt = eco = sugar = other = 0.0
+    for name, unit, g in lines:
+        if unit != "pct" or g is None:
+            continue
+        n = name.lower()
+        if n.startswith("ecocure"):
+            eco += g
+        elif n.startswith("kosher salt") or n == "salt":
+            salt += g
+        elif any(w in n for w in SUGAR_WORDS):
+            sugar += g
+        else:
+            other += g
+    pct = lambda x: 100 * x / weight_g
+    return MixSummary(pct(salt + eco * ECOCURE_SALT_FRACTION), pct(eco), pct(sugar), pct(other))
+
+
+def off_plan(lines: list[tuple[str, float, float | None]], tolerance: float = 0.10):
+    """(name, planned, actual) -> [(name, relative deviation)] beyond the tolerance."""
+    out = []
+    for name, plan, act in lines:
+        if act is None or not plan:
+            continue
+        dev = (act - plan) / plan
+        if abs(dev) > tolerance:
+            out.append((name, dev))
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Stage 2 – cure time (genuineideas.com equilibrium brine calculator)
 # --------------------------------------------------------------------------- #

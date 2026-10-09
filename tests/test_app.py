@@ -27,15 +27,15 @@ def test_renders_demo_project_in_test_mode(app):
     assert any("Test mode" in w.value for w in app.warning)
     assert app.header[0].value == "Palermo Spicy 2026 (demo)"
     m = metrics(app)
-    assert m["Total planned (g)"] == "126.3"
-    assert m["Total actual (g)"] == "120.1"
+    assert m["Total planned [g]"] == "126.3"
+    assert m["Total actual [g]"] == "120.1"
     assert m["Cure time"] == "34 days"
     assert m["Target weight"] == "1365 g"
     assert m["Latest weight"] == "1963 g"
 
 
 def test_add_weigh_in(app, tmp_path):
-    next(n for n in app.number_input if n.label == "Weight incl. wrap + net (g)").set_value(1950)
+    next(n for n in app.number_input if n.label == "Weight incl. wrap + net [g]").set_value(1950)
     next(b for b in app.button if b.label == "Save weigh-in").click()
     app.run()
     assert not app.exception, app.exception
@@ -44,13 +44,13 @@ def test_add_weigh_in(app, tmp_path):
 
 
 def test_create_new_project(app):
-    next(t for t in app.text_input if t.label == "Name").input("Test batch")
-    next(n for n in app.number_input if n.label == "Meat weight after trimming (g)").set_value(1000)
-    next(b for b in app.button if b.label == "Create project").click()
+    next(t for t in app.sidebar.text_input if t.label == "Name").input("Test batch")
+    next(n for n in app.sidebar.number_input if n.label == "Meat weight after trimming [g]").set_value(1000)
+    next(b for b in app.sidebar.button if b.label == "Create project").click()
     app.run()
     assert not app.exception, app.exception
     assert app.header[0].value == "Test batch"
-    assert metrics(app)["Total planned (g)"] == "46.5"   # Classic Italian, 1000 g
+    assert metrics(app)["Total planned [g]"] == "46.5"   # Classic Italian, 1000 g
 
 
 def test_persistent_mode_has_no_banner(tmp_path, monkeypatch):
@@ -109,7 +109,7 @@ def test_cure_tab_live_recalc_and_save(app, tmp_path):
     # demo is saved, so nothing to save yet
     save = lambda: next(b for b in app.button if b.label == "Save cure")
     assert save().disabled
-    next(n for n in app.number_input if n.label == "Thickness (cm)").set_value(10.0)
+    next(n for n in app.number_input if n.label == "Thickness [cm]").set_value(10.0)
     app.run()
     assert {m.label: m.value for m in app.metric}["Cure time"] == "12 days"   # recalculated live
     assert not save().disabled
