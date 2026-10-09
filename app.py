@@ -4,6 +4,7 @@ Run:  streamlit run app.py
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import date, datetime
 
@@ -153,11 +154,15 @@ st.caption(",  ".join(facts))
 # --- stage track: tabs styled as a sequence of pills showing where the batch is ---
 ICON = {"done": ":material/check_circle:", "current": ":material/radio_button_checked:",
         "todo": ":material/radio_button_unchecked:", "optional": ":material/do_not_disturb_on:"}
-STAGES = ["Spice mix", "Cure", "Dry", "Equalise"]
-states = stage_states(p)
+# Equalise is in the backlog: hidden unless BRESAOLA_EQUALISE=1. Its data and code stay, so
+# turning it back on needs no migration.
+SHOW_EQUALISE = os.environ.get("BRESAOLA_EQUALISE") == "1"
+STAGES = ["Spice mix", "Cure", "Dry"] + (["Equalise"] if SHOW_EQUALISE else [])
+states = stage_states(p)[:len(STAGES)]
 labels_ = [f"{ICON[s]} {i}. {name}" for i, (s, name) in enumerate(zip(states, STAGES), 1)]
 labels_ += [":material/photo_library: All photos", ":material/history: Close & history"]
-open_tab = next((l for l, s in zip(labels_, states) if s == "current"), labels_[5] if closed else labels_[2])
+N = len(STAGES)                     # index of 'All photos'; 'Close & history' is N + 1
+open_tab = next((l for l, s in zip(labels_, states) if s == "current"), labels_[N + 1] if closed else labels_[2])
 
 T = 'div[data-testid="stTab"]'
 st.markdown(f"""
@@ -170,8 +175,8 @@ div[role="tablist"]::after, .react-aria-SelectionIndicator {{ display: none !imp
 {T} p {{ font-size: .95rem; font-weight: 500; color: inherit; }}
 {T}:hover {{ border-color: #7a2320; color: #7a2320; }}
 {T}[aria-selected="true"] {{ background: #7a2320; border-color: #7a2320; color: #fff; }}
-{T}[data-key="4"] {{ margin-left: auto; }}
-{T}[data-key="4"], {T}[data-key="5"] {{ border-style: dashed; }}
+{T}[data-key="{N}"] {{ margin-left: auto; }}
+{T}[data-key="{N}"], {T}[data-key="{N + 1}"] {{ border-style: dashed; }}
 """ + "".join(
     f'{T}[data-key="{i}"]:not([aria-selected="true"]) {css}\n'
     for i, s in enumerate(states)
@@ -725,7 +730,8 @@ with tabs[2]:
 # 4. equalise
 # --------------------------------------------------------------------------- #
 
-with tabs[3]:
+with (tabs[3] if SHOW_EQUALISE else st.empty()):
+  if SHOW_EQUALISE:
     e_locked = bool(p["equalise_locked_at"]) or closed
     ek = f"eq{pid}_"
     if not p["dry_start"]:
@@ -807,11 +813,11 @@ with tabs[3]:
 # photos
 # --------------------------------------------------------------------------- #
 
-with tabs[4]:
+with tabs[N]:
     allp = db.photos(con, pid)
     if not allp:
         st.info("No photos yet. Add them at the bottom of each step.")
-    for stage in ("spice", "cure", "dry", "equalise", None):
+    for stage in ("spice", "cure", "dry") + (("equalise",) if SHOW_EQUALISE else ()) + (None,):
         rows = [r for r in allp if r["stage"] == stage]
         if rows:
             st.markdown(f"##### {STAGE_NAME[stage]}")
@@ -821,7 +827,7 @@ with tabs[4]:
 # close & history
 # --------------------------------------------------------------------------- #
 
-with tabs[5]:
+with tabs[N + 1]:
     if closed:
         st.success(f"Closed on {p['closed_at'][:10]}. This project is read-only.")
         if p["final_notes"]:

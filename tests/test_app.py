@@ -328,8 +328,16 @@ def test_changing_weight_asks_before_resetting_actuals(app, tmp_path):
     assert next(n for n in app.number_input if n.label == "Meat weight after trimming [g]").value == 2088
 
 
-def test_equalise_tab_lock_flow(app, tmp_path):
-    from datetime import date
+def test_equalise_hidden_by_default(app):
+    assert not any("Into the vacuum bag" == d.label for d in app.date_input)
+    assert not any("Equalise" in m.value for m in app.markdown if m.value.startswith("##### Photos"))
+
+
+def test_equalise_tab_lock_flow(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRESAOLA_DATA", str(tmp_path))
+    monkeypatch.delenv("BRESAOLA_MODE", raising=False)
+    monkeypatch.setenv("BRESAOLA_EQUALISE", "1")          # backlog feature, switched on
+    app = AppTest.from_file(APP, default_timeout=30).run()
     next(b for b in app.button if b.label == "Done: lock drying").click()      # drying ends today
     app.run()
     next(d for d in app.date_input if d.label == "Into the vacuum bag").set_value(db.today())

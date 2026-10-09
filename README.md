@@ -8,7 +8,7 @@ Records home-cured bresaola batches from spice mix to slicing: calculated amount
 1. **Spice mix** – meat weight, EcoCure Yes/No, blend → planned grams; actual amounts editable; *Done* locks them.
 2. **Cure** – equilibrium dry cure in a vacuum bag. Days = genuineideas formula `1.25 × inches²` (flat; ÷2 tubular) + 20 %, rounded up, from the exact thickness.
 3. **Dry** – wrap + net; weigh-ins are gross, packaging weight (tare) stored once; target % per project.
-4. **Equalise** (optional) – vacuum-sealed rest after the target weight.
+4. **Equalise** (backlog, hidden) – vacuum-sealed rest after the target weight. Switch on with `BRESAOLA_EQUALISE=1`.
 5. **Close** – final notes → PDF → read-only.
 
 ## Layout
@@ -43,3 +43,6 @@ Deploy this repo with main file `app.py`. Data is wiped whenever the app restart
 python -m pytest
 python -m bresaola.seed_from_xlsx tests/fixtures/bresaola_v5.xlsx data/bresaola.sqlite   # import the original workbook
 ```
+
+## Backlog
+- **Equalise step** – built (checks, lock, photos) but hidden. Not part of the current process (vacuum bag is used only for curing). When switched on: the piece is normally unwrapped before vacuum-sealing, so "weight after" must be compared without wrap and net.
