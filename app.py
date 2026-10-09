@@ -534,9 +534,12 @@ def save_weigh_in(r: dict, confirmed: bool = False) -> None:
 with tabs[2]:
     if not p["dry_start"]:
         st.subheader("Start drying")
+        if not p["cure_end_actual"]:
+            st.info("Tip: enter the 'Taken out of the bag' date under Cure first; drying then starts on that date.")
         with st.form(f"drystart{pid}"):
             c1, c2, c3 = st.columns(3)
-            ds = c1.date_input("Drying start", value=d(p["cure_end_actual"]) or db.today(), format="DD/MM/YYYY")
+            ds = c1.date_input("Drying start", value=d(p["cure_end_actual"]) or db.today(), format="DD/MM/YYYY",
+                               help="Defaults to the day the meat came out of the bag")
             sg = c2.number_input("Start weight incl. wrap + net [g]", min_value=1.0,
                                  value=float(p["green_weight_g"]), step=1.0)
             tp = c3.number_input("Target loss [%]", min_value=1.0, max_value=70.0, value=35.0, step=1.0)
@@ -636,14 +639,30 @@ with tabs[2]:
                     if st.button("Delete"):
                         act(db.delete_reading, pid, choice, success="Deleted")
 
-        with st.expander("Settings: target and packaging"):
-            c1, c2 = st.columns(2)
+        if p["cure_end_actual"] and p["dry_start"] != p["cure_end_actual"]:
+            st.warning(f"Drying starts on {fmt_date(p['dry_start'])}, but the meat came out of the bag on "
+                       f"{fmt_date(p['cure_end_actual'])}. If that is wrong, correct the start below.")
+        with st.expander("Drying start, packaging and target",
+                         expanded=bool(p["cure_end_actual"] and p["dry_start"] != p["cure_end_actual"])):
+            with st.form(f"drystartedit{pid}", border=False):
+                c1, c2, c3, c4 = st.columns([1.2, 1.3, 1.3, 1.2], vertical_alignment="bottom")
+                es = c1.date_input("Drying start", value=d(p["dry_start"]), format="DD/MM/YYYY",
+                                   disabled=d_locked)
+                eg = c2.number_input("Start weight incl. wrap + net [g]", min_value=1.0, format="%.0f",
+                                     value=float(p["dry_start_gross_g"]), step=1.0, disabled=d_locked)
+                et = c3.number_input("Packaging: wrap + net [g]", min_value=0.0, format="%.0f",
+                                     value=float(p["tare_g"] or 0), step=1.0, disabled=d_locked)
+                ee = c4.checkbox("Packaging is an estimate", value=bool(p["tare_estimated"]), disabled=d_locked)
+                if st.form_submit_button("Save drying start", disabled=d_locked):
+                    act(db.update_drying_start, pid, start=es, start_gross_g=eg, tare_g=et,
+                        tare_estimated=ee, success="Drying start updated")
+            st.divider()
+            c1, c2, c3 = st.columns([1, 2, 1], vertical_alignment="bottom")
             nt = c1.number_input("Target loss [%]", min_value=1.0, max_value=70.0, disabled=d_locked,
                                  value=float(p["target_loss_pct"]), step=0.5, key=f"tgt{pid}")
             why = c2.text_input("Reason for change", key=f"why{pid}", disabled=d_locked)
-            if st.button("Change target", disabled=d_locked or nt == p["target_loss_pct"]):
+            if c3.button("Change target", disabled=d_locked or nt == p["target_loss_pct"], width="stretch"):
                 act(db.change_target, pid, nt, why, success="Target changed")
-            st.caption(f"Packaging weight {p['tare_g']:g} g" + (" (estimate)" if p["tare_estimated"] else ""))
 
         dry_note = st.text_area("Notes", value=p["dry_note"] or "", height=100, key=f"dn{pid}",
                                 disabled=closed, placeholder="e.g. wrap doubled on one side; white bloom on day 30")

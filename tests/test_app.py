@@ -281,3 +281,14 @@ def test_rename_to_existing_name_shows_message(app):
     app.run()
     assert not app.exception, app.exception
     assert any("already exists" in e.value for e in app.error)
+
+
+def test_drying_start_editable_in_app(app, tmp_path):
+    from datetime import date
+    exp_date = next(d for d in app.date_input if d.label == "Drying start")
+    assert not exp_date.disabled
+    next(n for n in app.number_input if n.label == "Packaging: wrap + net [g]").set_value(30)
+    next(b for b in app.button if b.label == "Save drying start").click()
+    app.run()
+    assert not app.exception, app.exception
+    assert db.project(db.connect(tmp_path / storage.DB_NAME), 1)["tare_g"] == 30

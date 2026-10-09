@@ -239,3 +239,24 @@ def test_close_needs_all_steps_locked(con):
     db.set_equalise(con, done, start=date(2026, 10, 1), end=date(2026, 10, 20))
     db.close_project(con, done)
     assert db.project(con, done)["status"] == "closed"
+
+
+def test_correct_drying_start_rome_case(con):
+    # Rome: drying started "today" by mistake, cure actually ended 20 Sep
+    pid = db.create_project(con, "Rome", "Classic Italian", False, 1838)
+    db.set_cure(con, pid, shape="tubular", thickness_cm=17, start=date(2026, 8, 15),
+                end_actual=date(2026, 9, 20))
+    db.lock_cure(con, pid)
+    with pytest.raises(ValueError, match="before the meat came out of the bag"):
+        db.set_drying(con, pid, start=date(2026, 9, 1), start_gross_g=1838)
+    db.set_drying(con, pid, start=date(2026, 10, 9), start_gross_g=1838)
+    db.update_drying_start(con, pid, start=date(2026, 9, 20), start_gross_g=1850, tare_g=25,
+                           tare_estimated=False)
+    p = db.project(con, pid)
+    assert (p["dry_start"], p["dry_start_gross_g"], p["tare_g"]) == ("2026-09-20", 1850, 25)
+    assert db.readings(con, pid) == [(date(2026, 9, 20), 1850)]      # start weigh-in moved
+    db.add_reading(con, pid, date(2026, 9, 26), 1810)
+    with pytest.raises(ValueError, match="before them"):
+        db.update_drying_start(con, pid, start=date(2026, 9, 27), start_gross_g=1850, tare_g=25,
+                               tare_estimated=False)
+    assert db.events(con, pid)[-1]["kind"] == "dry_start_changed"

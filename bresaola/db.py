@@ -367,12 +367,47 @@ def set_drying(con, pid: int, *, start, start_gross_g: float, chamber_id: int | 
                tare_g: float = 0.0, tare_estimated: bool = True,
                target_loss_pct: float = 35.0, note=None) -> None:
     _require_unlocked(con, pid, "dry")
+    _check_dry_start(con, pid, start, start_gross_g, tare_g)
     con.execute("""UPDATE project SET dry_start=?, dry_start_gross_g=?, chamber_id=?, tare_g=?,
                    tare_estimated=?, target_loss_pct=?, dry_note=? WHERE id=?""",
                 (_iso(start), start_gross_g, chamber_id, tare_g, int(tare_estimated),
                  target_loss_pct, note, pid))
     con.execute("INSERT OR REPLACE INTO reading (project_id, day, gross_g, note) VALUES (?,?,?,?)",
                 (pid, _iso(start), start_gross_g, "Start of drying"))
+
+
+def _check_dry_start(con, pid: int, start, start_gross_g: float, tare_g: float) -> None:
+    p = project(con, pid)
+    start = date.fromisoformat(_iso(start))
+    if p["cure_end_actual"] and start < date.fromisoformat(p["cure_end_actual"]):
+        raise ValueError(f"Drying cannot start before the meat came out of the bag "
+                         f"({date.fromisoformat(p['cure_end_actual']):%d %b %Y})")
+    if start > today():
+        raise ValueError("The drying start date is in the future")
+    if start_gross_g <= (tare_g or 0):
+        raise ValueError("The start weight must be more than the packaging weight")
+    if p["dry_start"]:
+        later = con.execute("SELECT MIN(day) FROM reading WHERE project_id=? AND day>?",
+                            (pid, p["dry_start"])).fetchone()[0]
+        if later and start.isoformat() >= later:
+            raise ValueError(f"There are weigh-ins from {date.fromisoformat(later):%d %b}; "
+                             "the start must be before them")
+
+
+def update_drying_start(con, pid: int, *, start, start_gross_g: float, tare_g: float,
+                        tare_estimated: bool) -> None:
+    """Correct the drying start (date, weight, packaging). Moves the start weigh-in with it."""
+    _require_unlocked(con, pid, "dry")
+    p = project(con, pid)
+    _check_dry_start(con, pid, start, start_gross_g, tare_g)
+    con.execute("DELETE FROM reading WHERE project_id=? AND day=?", (pid, p["dry_start"]))
+    con.execute("""UPDATE project SET dry_start=?, dry_start_gross_g=?, tare_g=?, tare_estimated=?
+                   WHERE id=?""", (_iso(start), start_gross_g, tare_g, int(tare_estimated), pid))
+    con.execute("INSERT OR REPLACE INTO reading (project_id, day, gross_g, note) VALUES (?,?,?,?)",
+                (pid, _iso(start), start_gross_g, "Start of drying"))
+    log(con, pid, "dry_start_changed",
+        f"{p['dry_start']} {p['dry_start_gross_g']:g} g -> {_iso(start)} {start_gross_g:g} g, "
+        f"packaging {tare_g:g} g")
 
 
 def change_target(con, pid: int, new_pct: float, reason: str = "") -> None:
