@@ -23,8 +23,26 @@ from bresaola.demo import seed_demo
 
 st.set_page_config(page_title="Bresaola Tracker", page_icon="🥩", layout="wide")
 
-RED, RED_BG, GREEN, GREEN_BG, INK, MUTED, LINE = (
-    "#7a2320", "#f6ece9", "#3e5a44", "#f1f6f1", "#2e2a28", "#7d7672", "#e3dedb")
+# Light/dark follows Streamlit's own theme (switched with the sidebar toggle, stored in the browser).
+DARK = getattr(getattr(st.context, "theme", None), "type", "light") == "dark"
+PALETTE = {
+    #          light      dark
+    "RED":      ("#7a2320", "#d0605a"),
+    "RED_BG":   ("#f6ece9", "#3a2321"),
+    "GREEN":    ("#3e5a44", "#8fc79a"),
+    "GREEN_BG": ("#f1f6f1", "#1d2b21"),
+    "INK":      ("#2e2a28", "#ece7e4"),
+    "MUTED":    ("#7d7672", "#a8a19c"),
+    "LINE":     ("#e3dedb", "#3a3634"),
+    "SURFACE":  ("#ffffff", "#0e1117"),
+    "BORDER":   ("#d9d4d0", "#45403d"),
+    "FAINT":    ("#8a8480", "#8f8884"),
+    "GREEN_LINE": ("#9db39f", "#3f5e47"),
+    "TRACK":    ("#f1efee", "#2b2826"),
+    "CHIP_TXT": ("#5f5955", "#c9c2bd"),
+}
+(RED, RED_BG, GREEN, GREEN_BG, INK, MUTED, LINE, SURFACE, BORDER, FAINT, GREEN_LINE, TRACK,
+ CHIP_TXT) = (v[DARK] for v in PALETTE.values())
 
 st.markdown(f"""<style>
 section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {{ height: 2.25rem; padding: .5rem 1rem 0; }}
@@ -37,7 +55,7 @@ section[data-testid="stSidebar"] .st-key-testmode [data-testid="stAlert"] p {{ f
 /* journey rail */
 .st-key-rail [data-testid="stHorizontalBlock"] {{ gap: .5rem; }}
 .st-key-rail button {{ height: auto; min-height: 3.6rem; padding: .55rem .8rem; border-radius: 8px;
-  justify-content: flex-start; text-align: left; border: 1px solid #d9d4d0; background: #fff; color: #8a8480; }}
+  justify-content: flex-start; text-align: left; border: 1px solid {BORDER}; background: {SURFACE}; color: {FAINT}; }}
 .st-key-rail button p {{ font-weight: 500; font-size: .98rem; text-align: left; line-height: 1.25; }}
 .st-key-rail button:hover {{ border-color: {RED}; color: {RED}; }}
 .stat {{ margin: .4rem .1rem 0; line-height: 1.35; }}
@@ -46,10 +64,10 @@ section[data-testid="stSidebar"] .st-key-testmode [data-testid="stAlert"] p {{ f
 .stat .main {{ font-size:.86rem; font-weight:600; color:{INK}; }}
 .stat .more {{ display:block; font-size:.8rem; color:{MUTED}; margin-top:.1rem; }}
 .stat .more.due {{ color:{RED}; font-weight:600; }}
-.stat.done .tag {{ background:{GREEN_BG}; color:{GREEN}; border:1px solid #c9dacb; }}
+.stat.done .tag {{ background:{GREEN_BG}; color:{GREEN}; border:1px solid {GREEN_LINE}; }}
 .stat.now .tag {{ background:{RED}; color:#fff; }}
-.stat.wait .tag {{ background:#f1efee; color:#8a8480; }}
-.stat.wait .main {{ color:#8a8480; font-weight:500; }}
+.stat.wait .tag {{ background:{TRACK}; color:{FAINT}; }}
+.stat.wait .main {{ color:{FAINT}; font-weight:500; }}
 
 /* bands: summary figures at the top of each step */
 .band {{ border:1px solid {LINE}; border-radius:10px; padding:1rem 1.25rem .9rem; margin: .25rem 0 1rem; }}
@@ -60,10 +78,10 @@ section[data-testid="stSidebar"] .st-key-testmode [data-testid="stAlert"] p {{ f
 .band .chip {{ font-size:.75rem; padding:.1rem .5rem; border-radius:4px; margin-left:.4rem; vertical-align:middle; font-weight:500; }}
 .band .chip.ok {{ background:{GREEN_BG}; color:{GREEN}; }}
 .band .chip.over {{ background:{RED_BG}; color:{RED}; }}
-.band .chip.run {{ background:#f1efee; color:#5f5955; }}
-.band .track {{ position:relative; height:8px; background:#f1efee; border-radius:4px; margin-top:1rem; }}
+.band .chip.run {{ background:{TRACK}; color:{CHIP_TXT}; }}
+.band .track {{ position:relative; height:8px; background:{TRACK}; border-radius:4px; margin-top:1rem; }}
 .band .fill {{ position:absolute; left:0; top:0; bottom:0; background:{RED}; border-radius:4px; }}
-.band .mark {{ position:absolute; top:-5px; width:4px; height:18px; background:#fff; border:1.5px solid {INK};
+.band .mark {{ position:absolute; top:-5px; width:4px; height:18px; background:{SURFACE}; border:1.5px solid {INK};
   border-radius:2px; box-sizing:border-box; }}
 .band .ends {{ position:relative; height:1.1rem; font-size:.75rem; color:{MUTED}; margin-top:.3rem; }}
 .band .ends span {{ position:absolute; white-space:nowrap; }}
@@ -148,6 +166,15 @@ with st.sidebar:
     projs = db.projects(con)
     labels = {p["id"]: db.display_name(p) + ("  (closed)" if p["status"] == "closed" else "") for p in projs}
     if projs:
+        qp = st.query_params
+        if "p" in qp and "pid" not in st.session_state:      # coming back from a theme switch
+            try:
+                st.session_state["pid"] = int(qp["p"])
+                if qp.get("s"):
+                    st.session_state[f"step{int(qp['p'])}"] = qp["s"]
+            except ValueError:
+                pass
+        qp.clear()
         default = st.session_state.get("pid", projs[0]["id"])
         ids = list(labels)
         pid = st.selectbox("Project", ids, index=ids.index(default) if default in ids else 0,
@@ -196,6 +223,17 @@ with st.sidebar:
                         st.rerun()
                     except ValueError as e:
                         st.error(str(e))
+
+    dark_on = st.toggle("Dark mode", value=DARK, key="dark_mode",
+                        help="Saved in this browser. The page reloads to switch.")
+    if dark_on != DARK:
+        if pid is not None:                                   # keep project and step across the reload
+            st.query_params["p"] = str(pid)
+            st.query_params["s"] = st.session_state.get(f"step{pid}", "")
+        want = "Dark" if dark_on else "Light"
+        st.html("<script>localStorage.setItem('stActiveTheme-' + window.location.pathname + '-v2', "
+                f"JSON.stringify('{want}')); setTimeout(() => window.location.reload(), 150);</script>",
+                unsafe_allow_javascript=True)
 
     st.divider()
     with st.expander("Data: backup and restore"):
@@ -314,6 +352,8 @@ def status_html(s: str) -> str:
 step_key = f"step{pid}"
 if step_key not in st.session_state:
     st.session_state[step_key] = current
+if st.session_state[step_key] not in STEPS:
+    st.session_state[step_key] = current
 sel = st.session_state[step_key]
 
 with st.container(key="rail"):
@@ -332,10 +372,10 @@ with st.container(key="rail"):
         # the step you are looking at gets a heavy underline-shadow and bold text
         if done[s]:
             css.append(f"{k}, {k}:hover, {k}:focus {{ background:{GREEN_BG} !important; "
-                       f"border-color:#9db39f !important; color:{GREEN} !important; }}")
+                       f"border-color:{GREEN_LINE} !important; color:{GREEN} !important; }}")
         elif s == current:
             css.append(f"{k}, {k}:hover, {k}:focus {{ border:2px solid {RED} !important; "
-                       f"color:{RED} !important; background:#fff !important; }}")
+                       f"color:{RED} !important; background:{SURFACE} !important; }}")
         if s == sel:
             col = GREEN if done[s] else RED
             css.append(f"{k} {{ box-shadow: inset 0 -4px 0 {col} !important; }} {k} p {{ font-weight:700; }}")

@@ -1,5 +1,9 @@
-[theme]
+# Light and dark theme; the app's "Dark mode" toggle switches between them.
+[theme.light]
 primaryColor = "#7A2320"
+
+[theme.dark]
+primaryColor = "#C4554F"
 
 [client]
 toolbarMode = "minimal"
