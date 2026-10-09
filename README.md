@@ -45,4 +45,8 @@ python -m bresaola.seed_from_xlsx tests/fixtures/bresaola_v5.xlsx data/bresaola.
 ```
 
 ## Backlog
-- **Equalise step** – built (checks, lock, photos) but hidden. Not part of the current process (vacuum bag is used only for curing). When switched on: the piece is normally unwrapped before vacuum-sealing, so "weight after" must be compared without wrap and net.
+- **Equalise step** – built (checks, lock, photos) but hidden. Not part of the current process (vacuum bag is used only for curing). Spec agreed 2026-10-09 for when it is switched on:
+  - Remove wrap and netting, weigh the meat → **weight unwrapped [g]**
+  - Vacuum-seal, weigh again → **weight in vacuum bag [g]**
+  - Derived: wrap + net = last drying weigh-in − weight unwrapped (gives the real packaging weight, so the final loss % can be corrected); bag = in-bag − unwrapped
+  - Open: weigh again when taken out of the bag at the end (final meat weight)?
