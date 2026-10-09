@@ -50,6 +50,12 @@ section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{ padding
 section[data-testid="stSidebar"] h1 {{ padding-top: 0; }}
 .block-container {{ padding-top: 4rem; max-width: 1150px; }}   /* Streamlit top bar is 3.75rem and sits over the page */
 .block-container h2 {{ padding-top: 0; }}
+/* sidebar popovers (rename/delete, restore): sidebar-sized, compact */
+[data-testid="stPopoverBody"] {{ width: 320px !important; min-width: 0 !important; max-width: 92vw !important;
+  padding: .8rem 1rem .9rem !important; }}
+[data-testid="stPopoverBody"] [data-testid="stVerticalBlock"] {{ gap: .55rem; }}
+[data-testid="stPopoverBody"] .pop-h {{ font-size: .85rem; font-weight: 700; color: {INK}; margin: 0 0 .15rem; }}
+[data-testid="stPopoverBody"] .pop-sep {{ border: 0; border-top: 1px solid {LINE}; margin: .35rem 0; }}
 section[data-testid="stSidebar"] .st-key-testmode [data-testid="stAlert"] p {{ font-size: .82rem; }}
 
 /* journey rail */
@@ -182,16 +188,14 @@ with st.sidebar:
         st.session_state["pid"] = pid
         sp = db.project(con, pid)
         with st.popover("Rename or delete", icon=":material/more_horiz:", width="stretch"):
-            st.markdown("**Rename**")
-            new_name = st.text_input("New name", value=sp["name"], key=f"rn{pid}",
+            st.markdown('<p class="pop-h">Rename</p>', unsafe_allow_html=True)
+            new_name = st.text_input("New name", value=sp["name"], key=f"rn{pid}", label_visibility="collapsed",
                                      help="The date in front comes from the start date and is added automatically.")
             if st.button("Rename", disabled=sp["status"] == "closed" or new_name.strip() in ("", sp["name"]),
                          key=f"rnb{pid}", width="stretch"):
                 act(db.rename_project, pid, new_name, success="Renamed")
-            st.divider()
-            st.markdown("**Delete**")
-            st.caption("Removes this project, its weigh-ins and photos for good. The drying chamber and its "
-                       "readings stay. Download a backup first if you might want it back.")
+            st.markdown('<hr class="pop-sep"><p class="pop-h">Delete</p>', unsafe_allow_html=True)
+            st.caption("Removes the project, its weigh-ins and photos for good. Download a backup first.")
             confirm = st.text_input(f"Type **{sp['name']}** to confirm", key=f"del{pid}")
             if st.button("Delete project permanently", disabled=confirm.strip() != sp["name"],
                          key=f"delb{pid}", width="stretch"):
