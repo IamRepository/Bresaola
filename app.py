@@ -16,6 +16,12 @@ from bresaola.demo import seed_demo
 from bresaola.stages import stage_states
 
 st.set_page_config(page_title="Bresaola Tracker", page_icon="🥩", layout="wide")
+st.markdown("""<style>
+section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] { height: 2.25rem; padding: .5rem 1rem 0; }
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] { padding-top: 0; }
+section[data-testid="stSidebar"] h1 { padding-top: 0; }
+.block-container { padding-top: 2.5rem; }
+</style>""", unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -75,16 +81,15 @@ with st.sidebar:
     with st.expander("New project", expanded=not projs):
         with st.form("new_project", clear_on_submit=True):
             name = st.text_input("Name", placeholder="e.g. Valtellina Nov 2026")
-            blend = st.selectbox("Spice blend", list(BLENDS))
-            weight = st.number_input("Meat weight after trimming [g]", min_value=1.0, value=2000.0, step=1.0)
-            st.caption("EcoCure and the actual amounts are set in the Spice mix step.")
+            weight = st.number_input("Meat weight [g]", min_value=1.0, value=2000.0, step=1.0, format="%.0f",
+                                     help="Raw meat after trimming")
             if st.form_submit_button("Create project", type="primary"):
                 if not name.strip():
                     st.error("Give the project a name")
                 else:
                     try:
                         with con:
-                            new = db.create_project(con, name.strip(), blend, False, weight)
+                            new = db.create_project(con, name.strip(), next(iter(BLENDS)), False, weight)
                         st.session_state["pid"] = new
                         st.rerun()
                     except Exception as e:  # unique name etc.
@@ -92,7 +97,7 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Backup")
-    st.download_button("Download backup", storage.make_backup(),
+    st.download_button("Download backup", storage.make_backup,   # built only when clicked
                        file_name=f"bresaola-backup-{db.today().isoformat()}.zip",
                        mime="application/zip", width="stretch")
     with st.popover("Restore backup", width="stretch"):
@@ -116,10 +121,11 @@ if storage.is_test_mode():
     st.warning("**Test mode.** Nothing here is stored permanently. Use *Download backup* in the "
                "sidebar to keep anything you enter.", icon="⚠️")
 
+# messages as toasts: they float over the page, so nothing below shifts down
 if msg := st.session_state.pop("flash", None):
-    st.success(msg)
+    st.toast(msg, icon=":material/check_circle:")
 if err := st.session_state.pop("flash_error", None):
-    st.error(err)
+    st.toast(err, icon=":material/error:", duration="long")
 
 if pid is None:
     st.info("Create a project in the sidebar to start.")

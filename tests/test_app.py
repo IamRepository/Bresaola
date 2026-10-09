@@ -45,7 +45,7 @@ def test_add_weigh_in(app, tmp_path):
 
 def test_create_new_project(app):
     next(t for t in app.sidebar.text_input if t.label == "Name").input("Test batch")
-    next(n for n in app.sidebar.number_input if n.label == "Meat weight after trimming [g]").set_value(1000)
+    next(n for n in app.sidebar.number_input if n.label == "Meat weight [g]").set_value(1000)
     next(b for b in app.sidebar.button if b.label == "Create project").click()
     app.run()
     assert not app.exception, app.exception
