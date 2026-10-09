@@ -148,7 +148,7 @@ ICON = {"done": ":material/check_circle:", "current": ":material/radio_button_ch
 STAGES = ["Spice mix", "Cure", "Dry", "Equalise"]
 states = stage_states(p)
 labels_ = [f"{ICON[s]} {i}. {name}" for i, (s, name) in enumerate(zip(states, STAGES), 1)]
-labels_ += [":material/photo_library: Photos", ":material/history: Close & history"]
+labels_ += [":material/photo_library: All photos", ":material/history: Close & history"]
 open_tab = next((l for l, s in zip(labels_, states) if s == "current"), labels_[5] if closed else labels_[2])
 
 T = 'div[data-testid="stTab"]'
@@ -172,6 +172,46 @@ div[role="tablist"]::after, .react-aria-SelectionIndicator {{ display: none !imp
                  "todo": "{ color:#8a8480; }",
                  "optional": "{ color:#8a8480; border-style:dashed; }"}[s]]
 ) + "</style>", unsafe_allow_html=True)
+
+# --- photos belong to the stage they were taken in ------------------------- #
+STAGE_NAME = {"spice": "Spice mix", "cure": "Cure", "dry": "Dry", "equalise": "Equalise", None: "Other"}
+
+
+def show_photos(rows, cols_n=4):
+    cols = st.columns(cols_n)
+    for i, r in enumerate(rows):
+        f = storage.photo_file(r["path"])
+        with cols[i % cols_n]:
+            try:
+                st.image(str(f), width="stretch")
+            except Exception:  # missing or unreadable file must not break the page
+                st.warning("Can't show this photo" if f.exists() else "Photo file missing")
+            st.caption(f"{fmt_date(r['taken_at'][:10])}" + (f", {r['caption']}" if r["caption"] else ""))
+
+
+def photo_section(stage: str):
+    st.markdown(f"##### Photos: {STAGE_NAME[stage].lower()}")
+    rows = db.photos(con, pid, stage)
+    if rows:
+        show_photos(rows)
+    elif closed:
+        st.caption("No photos for this step.")
+    if not closed:
+        with st.expander("Add photos to this step", expanded=not rows):
+            with st.form(f"photo{pid}{stage}", clear_on_submit=True, border=False):
+                c1, c2, c3 = st.columns([3, 1, 2], vertical_alignment="bottom")
+                files = c1.file_uploader("Photos", type=["jpg", "jpeg", "png", "webp"],
+                                         accept_multiple_files=True, label_visibility="collapsed")
+                taken = c2.date_input("Taken on", value=db.today(), format="DD/MM/YYYY")
+                cap = c3.text_input("Caption", placeholder="optional")
+                if st.form_submit_button("Upload") and files:
+                    with con:
+                        for f in files:
+                            db.add_photo(con, pid, storage.save_photo(pid, f.name, f.getvalue()),
+                                         taken, cap or None, stage=stage)
+                    st.session_state["flash"] = f"{len(files)} photo(s) added to {STAGE_NAME[stage]}"
+                    st.rerun()
+
 
 tabs = st.tabs(labels_, default=open_tab, key=f"stages{pid}")
 
@@ -301,6 +341,8 @@ with tabs[0]:
             if st.button("Unlock spice mix", disabled=not reason.strip()):
                 act(db.unlock_spice, pid, reason.strip(), success="Unlocked")
 
+    photo_section("spice")
+
 # --------------------------------------------------------------------------- #
 # 2. cure
 # --------------------------------------------------------------------------- #
@@ -317,22 +359,65 @@ with tabs[1]:
     mins = calc.cure_days_minimum(thick, shape)
     planned = calc.cure_end_date(start, thick, shape) if start else None
 
-    # --- the answer first -------------------------------------------------- #
-    with st.container(border=True):
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Cure time", f"{days} days",
-                  help=f"Calculator minimum {mins:.1f} days + 20 %, rounded up.")
-        m2.metric("Planned end", f"{planned:%d %b %Y}" if planned else "–")
-        if end_act:
-            actual_days = (end_act - start).days
-            m3.metric("Taken out", f"{end_act:%d %b %Y}")
-            m4.metric("Actual cure", f"{actual_days} days",
-                      delta=f"{actual_days - days:+d} days vs plan", delta_color="off")
-        else:
-            left = (planned - db.today()).days if planned else 0
-            m3.metric("Status", "Still curing")
-            m4.metric("Days left", f"{max(left, 0)}" if left >= 0 else f"{-left} over",
-                      help="Longer is safe with the equilibrium method; it only costs time.")
+    # --- dashboard band: dates on top, days below, timeline underneath ------ #
+    today = db.today()
+    run_to = end_act or today
+    actual_days = (run_to - start).days if start <= run_to else 0
+    diff = actual_days - days
+    if end_act:
+        act_val, act_sub = f"{end_act:%d %b %Y}", "out of the bag"
+        days_val = f"{actual_days} days"
+        chip = (f'<span class="chip {"over" if diff > 0 else "ok"}">{diff:+d} vs plan</span>'
+                if diff else '<span class="chip ok">as planned</span>')
+    else:
+        left = (planned - today).days
+        act_val, act_sub = "Still curing", (f"{left} days to go" if left > 0 else
+                                             "planned end reached" if left == 0 else f"{-left} days past plan")
+        days_val = f"{actual_days} days"
+        chip = '<span class="chip run">so far</span>'
+    span = max((max(planned, run_to) - start).days, 1)
+    fill = 100 * min(actual_days, span) / span
+    mark = 100 * days / span
+    st.markdown(f"""
+<style>
+.cureband {{ border:1px solid #e3dedb; border-radius:10px; padding:1rem 1.25rem .9rem; margin-bottom:1rem; }}
+.cureband .grid {{ display:grid; grid-template-columns:repeat(3,1fr); column-gap:1.5rem; row-gap:.85rem; }}
+.cureband .lab {{ font-size:.8rem; color:#7d7672; margin-bottom:.1rem; }}
+.cureband .val {{ font-size:1.45rem; font-weight:600; color:#2e2a28; line-height:1.2; }}
+.cureband .sub {{ font-size:.8rem; color:#7d7672; }}
+.cureband .chip {{ font-size:.75rem; padding:.1rem .5rem; border-radius:4px; margin-left:.4rem;
+                   vertical-align:middle; font-weight:500; }}
+.cureband .chip.ok {{ background:#eef4ee; color:#3e5a44; }}
+.cureband .chip.over {{ background:#f6ece9; color:#7a2320; }}
+.cureband .chip.run {{ background:#f1efee; color:#5f5955; }}
+.cureband .track {{ position:relative; height:8px; background:#f1efee; border-radius:4px; margin-top:1rem; }}
+.cureband .fill {{ position:absolute; left:0; top:0; bottom:0; background:#7a2320; border-radius:4px; }}
+.cureband .mark {{ position:absolute; top:-4px; width:2px; height:16px; background:#2e2a28; }}
+.cureband .ends {{ position:relative; height:1.1rem; font-size:.75rem; color:#7d7672; margin-top:.3rem; }}
+.cureband .ends span {{ position:absolute; white-space:nowrap; }}
+@media (max-width: 640px) {{ .cureband .grid {{ grid-template-columns:1fr 1fr; }} }}
+</style>
+<div class="cureband">
+  <div class="grid">
+    <div><div class="lab">Cure started</div><div class="val">{start:%d %b %Y}</div>
+         <div class="sub">into the bag</div></div>
+    <div><div class="lab">Planned end</div><div class="val">{planned:%d %b %Y}</div>
+         <div class="sub">start + planned days</div></div>
+    <div><div class="lab">Actual end</div><div class="val">{act_val}</div>
+         <div class="sub">{act_sub}</div></div>
+    <div><div class="lab">Calculator minimum</div><div class="val">{mins:.1f} days</div>
+         <div class="sub">before the 20 % margin</div></div>
+    <div><div class="lab">Planned days</div><div class="val">{days} days</div>
+         <div class="sub">minimum + 20 %, rounded up</div></div>
+    <div><div class="lab">Actual days</div><div class="val">{days_val}{chip}</div>
+         <div class="sub">{'longer is safe with equilibrium curing' if diff > 0 else '&nbsp;'}</div></div>
+  </div>
+  <div class="track"><div class="fill" style="width:{fill:.1f}%"></div>
+       <div class="mark" style="left:calc({mark:.1f}% - 1px)" title="Planned end"></div></div>
+  <div class="ends"><span style="left:0">{start:%d %b}</span>
+       <span style="left:{mark:.1f}%; transform:translateX({'-100%' if mark > 80 else '-50%'})">planned end {planned:%d %b}</span>
+       {'' if mark > 80 else f'<span style="right:0">{max(planned, run_to):%d %b}</span>'}</div>
+</div>""", unsafe_allow_html=True)
 
     # --- inputs ------------------------------------------------------------ #
     left_col, right_col = st.columns(2, gap="medium")
@@ -387,6 +472,8 @@ with tabs[1]:
 
     st.caption("Cure time uses the genuineideas.com equilibrium calculator: 1.25 × (thickness in inches)² "
                "days for flat, half for tubular, +20 % to reach the centre. Assumes a fridge at 1–3 °C.")
+
+    photo_section("cure")
 
 # --------------------------------------------------------------------------- #
 # 3. dry
@@ -472,7 +559,7 @@ with tabs[2]:
                                 rel = storage.save_photo(pid, ph.name, ph.getvalue())
                                 rid = con.execute("SELECT id FROM reading WHERE project_id=? AND day=?",
                                                   (pid, rd.isoformat())).fetchone()["id"]
-                                db.add_photo(con, pid, rel, rd, rn or f"Weigh-in {rw:.0f} g", rid)
+                                db.add_photo(con, pid, rel, rd, rn or f"Weigh-in {rw:.0f} g", rid, stage="dry")
                         st.session_state["flash"] = f"Saved {rw:.0f} g on {rd:%d %b}"
                         st.rerun()
                     except db.Locked as e:
@@ -506,6 +593,9 @@ with tabs[2]:
             if st.button("Mark drying finished", disabled=closed):
                 act(db.end_drying, pid, de, success="Drying finished")
 
+    if p["dry_start"]:
+        photo_section("dry")
+
 # --------------------------------------------------------------------------- #
 # 4. equalise
 # --------------------------------------------------------------------------- #
@@ -528,34 +618,21 @@ with tabs[3]:
         end = d(p["equalise_end"]) or db.today()
         st.metric("Days equalising", (end - d(p["equalise_start"])).days)
 
+    photo_section("equalise")
+
 # --------------------------------------------------------------------------- #
 # photos
 # --------------------------------------------------------------------------- #
 
 with tabs[4]:
-    with st.form(f"photo{pid}", clear_on_submit=True):
-        c1, c2, c3 = st.columns([3, 1, 2])
-        files = c1.file_uploader("Add photos", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
-        pd_ = c2.date_input("Taken on", value=db.today(), format="DD/MM/YYYY")
-        cap = c3.text_input("Caption")
-        if st.form_submit_button("Upload", disabled=closed) and files:
-            with con:
-                for f in files:
-                    db.add_photo(con, pid, storage.save_photo(pid, f.name, f.getvalue()), pd_, cap or None)
-            st.session_state["flash"] = f"{len(files)} photo(s) added"
-            st.rerun()
-    ph = db.photos(con, pid)
-    if not ph:
-        st.info("No photos yet. Add one here or with a weigh-in.")
-    cols = st.columns(4)
-    for i, r in enumerate(ph):
-        f = storage.photo_file(r["path"])
-        with cols[i % 4]:
-            if f.exists():
-                st.image(str(f), width="stretch")
-            else:
-                st.warning("File missing")
-            st.caption(f"{fmt_date(r['taken_at'][:10])} · {r['caption'] or ''}")
+    allp = db.photos(con, pid)
+    if not allp:
+        st.info("No photos yet. Add them at the bottom of each step.")
+    for stage in ("spice", "cure", "dry", "equalise", None):
+        rows = [r for r in allp if r["stage"] == stage]
+        if rows:
+            st.markdown(f"##### {STAGE_NAME[stage]}")
+            show_photos(rows)
 
 # --------------------------------------------------------------------------- #
 # close & history

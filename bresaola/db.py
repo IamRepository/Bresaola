@@ -105,7 +105,8 @@ CREATE TABLE IF NOT EXISTS photo (
     reading_id  INTEGER REFERENCES reading(id) ON DELETE SET NULL,
     taken_at    TEXT NOT NULL,
     path        TEXT NOT NULL,              -- relative to the photo folder
-    caption     TEXT
+    caption     TEXT,
+    stage       TEXT                        -- spice | cure | dry | equalise; NULL = other
 );
 
 CREATE TABLE IF NOT EXISTS project_event (
@@ -143,7 +144,8 @@ def _iso(d) -> str | None:
 
 
 # columns added after v0.2.0; older databases (and backups) get them on open
-MIGRATIONS = {"project": [("start_date", "TEXT"), ("spice_note", "TEXT")]}
+MIGRATIONS = {"project": [("start_date", "TEXT"), ("spice_note", "TEXT")],
+              "photo": [("stage", "TEXT")]}
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
@@ -343,17 +345,26 @@ def reading_rows(con, pid: int) -> list[sqlite3.Row]:
     return con.execute("SELECT * FROM reading WHERE project_id=? ORDER BY day", (pid,)).fetchall()
 
 
+STAGES = ("spice", "cure", "dry", "equalise")
+
+
 def add_photo(con, pid: int, path: str, taken_at, caption: str | None = None,
-              reading_id: int | None = None) -> int:
+              reading_id: int | None = None, stage: str | None = None) -> int:
     _require_open(con, pid)
-    return con.execute("""INSERT INTO photo (project_id, reading_id, taken_at, path, caption)
-                          VALUES (?,?,?,?,?)""",
-                       (pid, reading_id, _iso(taken_at), path, caption)).lastrowid
+    if stage is not None and stage not in STAGES:
+        raise ValueError(f"Unknown stage {stage!r}")
+    return con.execute("""INSERT INTO photo (project_id, reading_id, taken_at, path, caption, stage)
+                          VALUES (?,?,?,?,?,?)""",
+                       (pid, reading_id, _iso(taken_at), path, caption, stage)).lastrowid
 
 
-def photos(con, pid: int) -> list[sqlite3.Row]:
-    return con.execute("SELECT * FROM photo WHERE project_id=? ORDER BY taken_at, id",
-                       (pid,)).fetchall()
+def photos(con, pid: int, stage: str | None = None) -> list[sqlite3.Row]:
+    """All photos of a project, or only those belonging to one stage."""
+    if stage is None:
+        return con.execute("SELECT * FROM photo WHERE project_id=? ORDER BY taken_at, id",
+                           (pid,)).fetchall()
+    return con.execute("SELECT * FROM photo WHERE project_id=? AND stage=? ORDER BY taken_at, id",
+                       (pid, stage)).fetchall()
 
 
 def chambers(con) -> list[sqlite3.Row]:

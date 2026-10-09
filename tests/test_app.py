@@ -29,7 +29,6 @@ def test_renders_demo_project_in_test_mode(app):
     m = metrics(app)
     assert m["Total planned [g]"] == "126.3"
     assert m["Total actual [g]"] == "120.1"
-    assert m["Cure time"] == "34 days"
     assert m["Target weight"] == "1365 g"
     assert m["Latest weight"] == "1963 g"
 
@@ -106,13 +105,23 @@ def test_delete_project_needs_exact_name(app, tmp_path):
     assert any("Create a project" in i.value for i in app.info)
 
 
+def band(at) -> str:
+    return next(m.value for m in at.markdown if "cureband" in m.value)
+
+
+def test_cure_band_shows_dates_and_days(app):
+    html = band(app)
+    for text in ("15 Aug 2026", "18 Sep 2026", "20 Sep 2026", "28.0 days", "34 days", "36 days", "+2 vs plan"):
+        assert text in html, text
+
+
 def test_cure_tab_live_recalc_and_save(app, tmp_path):
     # demo is saved, so nothing to save yet
     save = lambda: next(b for b in app.button if b.label == "Save cure")
     assert save().disabled
     next(n for n in app.number_input if n.label == "Thickness [cm]").set_value(10.0)
     app.run()
-    assert {m.label: m.value for m in app.metric}["Cure time"] == "12 days"   # recalculated live
+    assert "12 days" in band(app)   # recalculated live
     assert not save().disabled
     save().click()
     app.run()
@@ -140,3 +149,28 @@ def test_spice_notes_saved(app, tmp_path):
     app.run()
     assert not app.exception, app.exception
     assert db.project(db.connect(tmp_path / storage.DB_NAME), 1)["spice_note"] == "Mixed by hand"
+
+
+def test_photos_belong_to_their_step(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRESAOLA_DATA", str(tmp_path))
+    from bresaola.demo import seed_demo
+    con = db.connect(storage.db_path())
+    seed_demo(con)
+    import io
+    from PIL import Image
+    buf = io.BytesIO(); Image.new("RGB", (8, 8), "brown").save(buf, "PNG"); png = buf.getvalue()
+    with con:
+        db.add_photo(con, 1, storage.save_photo(1, "a.png", png), "2026-08-15", "spice rub", stage="spice")
+        db.add_photo(con, 1, storage.save_photo(1, "b.jpg", b"not an image"), "2026-09-20", "unbagged",
+                     stage="cure")   # unreadable file: page must still render
+    con.close()
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    assert not at.exception, at.exception
+    heads = [m.value for m in at.markdown if m.value.startswith("##### ")]
+    assert "##### Photos: spice mix" in heads and "##### Photos: cure" in heads
+    assert any("Can't show this photo" in w.value for w in at.warning)
+    captions = " ".join(c.value for c in at.caption)
+    assert "spice rub" in captions and "unbagged" in captions
+    con = db.connect(storage.db_path())
+    assert [r["caption"] for r in db.photos(con, 1, "spice")] == ["spice rub"]
+    assert [r["caption"] for r in db.photos(con, 1, "cure")] == ["unbagged"]
