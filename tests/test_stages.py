@@ -3,7 +3,8 @@ from bresaola.stages import stage_states
 
 def P(**kw):
     base = dict(status="active", spice_locked_at=None, cure_start=None, cure_locked_at=None,
-                dry_start=None, dry_locked_at=None, equalise_start=None, equalise_end=None)
+                dry_start=None, dry_locked_at=None, equalise_start=None, equalise_end=None,
+                equalise_locked_at=None)
     base.update(kw)
     return base
 

@@ -4,7 +4,7 @@
 def stage_states(p) -> list[str]:
     """done / current / todo / optional for the four stages, in order."""
     done = [bool(p["spice_locked_at"]), bool(p["cure_locked_at"]), bool(p["dry_locked_at"]),
-            bool(p["equalise_end"])]
+            bool(p["equalise_locked_at"])]
     started = [True, bool(p["cure_start"]), bool(p["dry_start"]), bool(p["equalise_start"])]
     states, current_found = [], p["status"] == "closed"
     for i, (dn, st_) in enumerate(zip(done, started)):

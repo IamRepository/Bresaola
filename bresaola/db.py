@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS project (
     equalise_end        TEXT,
     equalise_end_gross_g REAL,
     equalise_note       TEXT,
+    equalise_locked_at  TEXT,
     -- close
     final_notes         TEXT
 );
@@ -147,7 +148,8 @@ def _iso(d) -> str | None:
 
 # columns added after v0.2.0; older databases (and backups) get them on open
 MIGRATIONS = {"project": [("start_date", "TEXT"), ("spice_note", "TEXT"),
-                          ("cure_locked_at", "TEXT"), ("dry_locked_at", "TEXT")],
+                          ("cure_locked_at", "TEXT"), ("dry_locked_at", "TEXT"),
+                          ("equalise_locked_at", "TEXT")],
               "photo": [("stage", "TEXT")]}
 
 
@@ -167,6 +169,9 @@ def connect(path: str | Path) -> sqlite3.Connection:
                 if col == "dry_locked_at":
                     con.execute("UPDATE project SET dry_locked_at = dry_end || 'T00:00:00' "
                                 "WHERE dry_end IS NOT NULL")
+                if col == "equalise_locked_at":
+                    con.execute("UPDATE project SET equalise_locked_at = equalise_end || 'T00:00:00' "
+                                "WHERE equalise_end IS NOT NULL")
     con.execute("UPDATE project SET start_date = substr(created_at, 1, 10) WHERE start_date IS NULL")
     con.commit()
     return con
@@ -186,7 +191,15 @@ def get_or_create_chamber(con, name: str, sensor: str | None = None) -> int:
     return con.execute("INSERT INTO chamber (name, sensor) VALUES (?,?)", (name, sensor)).lastrowid
 
 
+TEMP_RANGE = (-5.0, 30.0)     # °C, a curing fridge or chamber
+RH_RANGE = (0.0, 100.0)       # %
+
+
 def add_chamber_reading(con, chamber_id: int, ts, temp_c=None, rh_pct=None, source="manual"):
+    if temp_c is not None and not TEMP_RANGE[0] <= temp_c <= TEMP_RANGE[1]:
+        raise ValueError(f"Temperature {temp_c:g} °C is outside {TEMP_RANGE[0]:g} to {TEMP_RANGE[1]:g} °C")
+    if rh_pct is not None and not RH_RANGE[0] <= rh_pct <= RH_RANGE[1]:
+        raise ValueError(f"Humidity {rh_pct:g} % is outside 0 to 100 %")
     con.execute("""INSERT OR REPLACE INTO chamber_reading (chamber_id, ts, temp_c, rh_pct, source)
                    VALUES (?,?,?,?,?)""", (chamber_id, _iso(ts), temp_c, rh_pct, source))
 
@@ -206,7 +219,7 @@ def _require_unlocked(con, project_id: int, step: str):
     if p["status"] == "closed":
         raise Locked("Project is closed")
     if p[f"{step}_locked_at"]:
-        raise Locked(f"{'Cure' if step == 'cure' else 'Drying'} is locked; unlock it first")
+        raise Locked(f"{dict(cure='Cure', dry='Drying', equalise='Equalising')[step]} is locked; unlock it first")
 
 
 def _require_open(con, project_id: int):
@@ -264,6 +277,14 @@ def update_spice_inputs(con, pid: int, green_weight_g: float | None = None,
     rates = _stored_rates(con, pid)
     con.execute("UPDATE project SET green_weight_g=?, ecocure=? WHERE id=?", (w, int(e), pid))
     _write_plan(con, pid, w, e, rates)
+
+
+def actuals_edited(con, pid: int) -> bool:
+    """True if any actual amount or line note differs from the plan."""
+    for l in ingredient_lines(con, pid):
+        if l["note"] or l["actual"] is None or abs(l["actual"] - l["planned"]) > 1e-9:
+            return True
+    return False
 
 
 def set_actual(con, pid: int, position: int, actual: float | None, note: str | None = None) -> None:
@@ -487,10 +508,59 @@ def change_blend(con, pid: int, blend: str) -> None:
     log(con, pid, "blend_changed", blend)
 
 
+def equalise_problems(con, pid: int, start=None, end=None, end_gross_g=None) -> list[str]:
+    p = project(con, pid)
+    out = []
+    start = date.fromisoformat(_iso(start)) if start else None
+    end = date.fromisoformat(_iso(end)) if end else None
+    if end and not start:
+        out.append("Enter the start date as well")
+    if start:
+        floor = p["dry_end"] or p["dry_start"]
+        if floor and start < date.fromisoformat(floor):
+            out.append(f"Equalising cannot start before drying "
+                       f"{'ended' if p['dry_end'] else 'started'} ({date.fromisoformat(floor):%d %b %Y})")
+        if start > today():
+            out.append("The start date is in the future")
+    if start and end and end < start:
+        out.append("The end date is before the start date")
+    if end and end > today():
+        out.append("The end date is in the future")
+    if end_gross_g is not None:
+        if end_gross_g <= (p["tare_g"] or 0):
+            out.append("The weight must be more than the packaging weight")
+        last = con.execute("SELECT gross_g FROM reading WHERE project_id=? ORDER BY day DESC LIMIT 1",
+                           (pid,)).fetchone()
+        if last and end_gross_g > last["gross_g"] * 1.03:
+            out.append(f"{end_gross_g:.0f} g is more than the last drying weigh-in ({last['gross_g']:.0f} g)")
+    return out
+
+
 def set_equalise(con, pid: int, *, start=None, end=None, end_gross_g=None, note=None) -> None:
-    _require_open(con, pid)
+    _require_unlocked(con, pid, "equalise")
+    if problems := equalise_problems(con, pid, start, end, end_gross_g):
+        raise ValueError(". ".join(problems) + ".")
     con.execute("""UPDATE project SET equalise_start=?, equalise_end=?, equalise_end_gross_g=?,
                    equalise_note=? WHERE id=?""", (_iso(start), _iso(end), end_gross_g, note, pid))
+
+
+def set_equalise_note(con, pid: int, note: str | None) -> None:
+    _require_open(con, pid)
+    con.execute("UPDATE project SET equalise_note=? WHERE id=?", (note or None, pid))
+
+
+def lock_equalise(con, pid: int) -> None:
+    p = project(con, pid)
+    if not (p["equalise_start"] and p["equalise_end"]):
+        raise ValueError("Enter start and end dates before locking")
+    con.execute("UPDATE project SET equalise_locked_at=? WHERE id=?", (_now(), pid))
+    log(con, pid, "equalise_locked")
+
+
+def unlock_equalise(con, pid: int, reason: str) -> None:
+    _require_open(con, pid)
+    con.execute("UPDATE project SET equalise_locked_at=NULL WHERE id=?", (pid,))
+    log(con, pid, "equalise_unlocked", reason)
 
 
 def end_drying(con, pid: int, day) -> None:
@@ -568,8 +638,8 @@ def close_problems(con, pid: int) -> list[str]:
         out.append("lock the cure")
     if not p["dry_locked_at"]:
         out.append("lock drying")
-    if p["equalise_start"] and not p["equalise_end"]:
-        out.append("finish equalising (or clear its start date)")
+    if p["equalise_start"] and not p["equalise_locked_at"]:
+        out.append("lock equalising (or clear its start date if you skipped it)")
     return out
 
 

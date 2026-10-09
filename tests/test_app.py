@@ -9,6 +9,15 @@ from bresaola import db, storage
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
 
 
+def raw_photo(pid: int, name: str, data: bytes) -> str:
+    """Write bytes straight into the photo folder (bypasses shrinking), return relative path."""
+    rel = f"{storage.PHOTO_DIR}/{pid}/{name}"
+    f = storage.data_dir() / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(data)
+    return rel
+
+
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setenv("BRESAOLA_DATA", str(tmp_path))
@@ -67,7 +76,7 @@ def test_backup_roundtrip(tmp_path, monkeypatch):
     from bresaola.demo import seed_demo
     con = db.connect(storage.db_path())
     seed_demo(con)
-    rel = storage.save_photo(1, "x.jpg", b"fake")
+    rel = raw_photo(1, "x.jpg", b"fake")
     with con:
         db.add_photo(con, 1, rel, "2026-10-08")
     con.close()
@@ -96,7 +105,7 @@ def test_bad_backup_leaves_data_untouched(tmp_path, monkeypatch):
     monkeypatch.setenv("BRESAOLA_DATA", str(tmp_path))
     from bresaola.demo import seed_demo
     con = db.connect(storage.db_path()); seed_demo(con)
-    rel = storage.save_photo(1, "x.jpg", b"keep me")
+    rel = raw_photo(1, "x.jpg", b"keep me")
     with con:
         db.add_photo(con, 1, rel, "2026-10-08")
     con.close()
@@ -230,7 +239,7 @@ def test_photos_belong_to_their_step(tmp_path, monkeypatch):
     buf = io.BytesIO(); Image.new("RGB", (8, 8), "brown").save(buf, "PNG"); png = buf.getvalue()
     with con:
         db.add_photo(con, 1, storage.save_photo(1, "a.png", png), "2026-08-15", "spice rub", stage="spice")
-        db.add_photo(con, 1, storage.save_photo(1, "b.jpg", b"not an image"), "2026-09-20", "unbagged",
+        db.add_photo(con, 1, raw_photo(1, "b.jpg", b"not an image"), "2026-09-20", "unbagged",
                      stage="cure")   # unreadable file: page must still render
     con.close()
     at = AppTest.from_file(APP, default_timeout=30).run()
@@ -292,3 +301,42 @@ def test_drying_start_editable_in_app(app, tmp_path):
     app.run()
     assert not app.exception, app.exception
     assert db.project(db.connect(tmp_path / storage.DB_NAME), 1)["tare_g"] == 30
+
+
+def test_start_drying_needs_a_weighed_start(app):
+    next(t for t in app.sidebar.text_input if t.label == "Name").input("New piece")
+    next(b for b in app.sidebar.button if b.label == "Create project").click()
+    app.run()
+    w = next(n for n in app.number_input if n.label == "Start weight incl. wrap + net [g]")
+    assert w.value is None                                    # no raw-weight placeholder
+    next(b for b in app.button if b.label == "Start drying").click()
+    app.run()
+    assert not app.exception, app.exception
+    assert any("Enter the start weight" in e.value for e in app.error)
+
+
+def test_changing_weight_asks_before_resetting_actuals(app, tmp_path):
+    unlock(app, "spice mix")                                  # demo has fennel 4.2 vs 10.4 planned
+    next(n for n in app.number_input if n.label == "Meat weight after trimming [g]").set_value(2000)
+    app.run()
+    assert any("replaces them with the new plan" in w.value for w in app.warning)
+    con = db.connect(tmp_path / storage.DB_NAME)
+    assert db.project(con, 1)["green_weight_g"] == 2088       # nothing changed yet
+    next(b for b in app.button if b.label == "Keep my amounts").click()
+    app.run()
+    assert not app.exception, app.exception
+    assert next(n for n in app.number_input if n.label == "Meat weight after trimming [g]").value == 2088
+
+
+def test_equalise_tab_lock_flow(app, tmp_path):
+    from datetime import date
+    next(b for b in app.button if b.label == "Done: lock drying").click()      # drying ends today
+    app.run()
+    next(d for d in app.date_input if d.label == "Into the vacuum bag").set_value(db.today())
+    next(d for d in app.date_input if d.label == "Out of the bag").set_value(db.today())
+    app.run()
+    next(b for b in app.button if b.label == "Done: lock equalising").click()
+    app.run()
+    assert not app.exception, app.exception
+    p = db.project(db.connect(tmp_path / storage.DB_NAME), 1)
+    assert p["equalise_locked_at"] and p["equalise_start"] == db.today().isoformat()

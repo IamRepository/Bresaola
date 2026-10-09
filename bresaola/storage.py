@@ -31,14 +31,66 @@ def is_test_mode() -> bool:
     return os.environ.get("BRESAOLA_MODE", "").lower() != "persistent"
 
 
+PHOTO_MAX_PX = 1600          # longest side; plenty for screen and the PDF summary
+PHOTO_QUALITY = 82           # JPEG quality: ~200-400 KB for a phone photo
+UPLOAD_TYPES = ["jpg", "jpeg", "png", "webp", "heic", "heif"]
+
+try:                         # iPhone photos (HEIC); optional
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:          # pragma: no cover
+    UPLOAD_TYPES = UPLOAD_TYPES[:4]
+
+
+def shrink_image(data: bytes) -> bytes:
+    """Upright (phone orientation applied), at most PHOTO_MAX_PX, JPEG, metadata stripped.
+    Raises ValueError if the file is not a readable image."""
+    from PIL import Image, ImageOps, UnidentifiedImageError
+    try:
+        im = Image.open(io.BytesIO(data))
+        im = ImageOps.exif_transpose(im)
+    except (UnidentifiedImageError, OSError):
+        raise ValueError("This file is not a photo the app can read (JPG, PNG, WEBP or HEIC)") from None
+    if im.mode not in ("RGB", "L"):
+        bg = Image.new("RGB", im.size, "white")
+        im = im.convert("RGBA")
+        bg.paste(im, mask=im.split()[-1])
+        im = bg
+    im.thumbnail((PHOTO_MAX_PX, PHOTO_MAX_PX), Image.LANCZOS)
+    out = io.BytesIO()
+    im.save(out, "JPEG", quality=PHOTO_QUALITY, optimize=True, progressive=True)
+    return out.getvalue()
+
+
 def save_photo(project_id: int, filename: str, data: bytes) -> str:
-    """Store bytes under photos/<project>/<uuid>.<ext>; return the relative path."""
-    ext = Path(filename).suffix.lower() or ".jpg"
-    rel = Path(PHOTO_DIR) / str(project_id) / f"{uuid.uuid4().hex}{ext}"
+    """Shrink and store a photo under photos/<project>/<uuid>.jpg; return the relative path."""
+    small = shrink_image(data)
+    rel = Path(PHOTO_DIR) / str(project_id) / f"{uuid.uuid4().hex}.jpg"
     full = data_dir() / rel
     full.parent.mkdir(parents=True, exist_ok=True)
-    full.write_bytes(data)
+    full.write_bytes(small)
     return rel.as_posix()
+
+
+def shrink_existing_photos(limit_bytes: int = 600_000) -> int:
+    """One-off tidy-up: re-save photos stored before shrinking existed. Keeps the file name,
+    so database paths stay valid. Returns how many files were shrunk."""
+    n = 0
+    for f in (data_dir() / PHOTO_DIR).rglob("*"):
+        if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg") and f.stat().st_size > limit_bytes:
+            try:
+                from PIL import Image
+                with Image.open(f) as im:          # reads the header only
+                    if max(im.size) <= PHOTO_MAX_PX:
+                        continue                   # already shrunk, just a detailed photo
+            except Exception:
+                continue
+            try:
+                f.write_bytes(shrink_image(f.read_bytes()))
+                n += 1
+            except ValueError:
+                pass                     # unreadable file: leave it, the gallery shows a warning
+    return n
 
 
 def delete_project_photos(project_id: int) -> None:

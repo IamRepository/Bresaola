@@ -234,9 +234,10 @@ def test_close_needs_all_steps_locked(con):
         db.close_project(con, pid)
     done = finished_project(con, "B")
     db.set_equalise(con, done, start=date(2026, 10, 1))
-    with pytest.raises(ValueError, match="finish equalising"):
+    with pytest.raises(ValueError, match="lock equalising"):
         db.close_project(con, done)
-    db.set_equalise(con, done, start=date(2026, 10, 1), end=date(2026, 10, 20))
+    db.set_equalise(con, done, start=date(2026, 10, 1), end=date(2026, 10, 5))
+    db.lock_equalise(con, done)
     db.close_project(con, done)
     assert db.project(con, done)["status"] == "closed"
 
@@ -260,3 +261,39 @@ def test_correct_drying_start_rome_case(con):
         db.update_drying_start(con, pid, start=date(2026, 9, 27), start_gross_g=1850, tare_g=25,
                                tare_estimated=False)
     assert db.events(con, pid)[-1]["kind"] == "dry_start_changed"
+
+
+def test_equalise_checks_and_lock(con):
+    pid = finished_project(con)              # drying ended 1 Oct, last weigh-in 2050 g
+    with pytest.raises(ValueError, match="before drying ended"):
+        db.set_equalise(con, pid, start=date(2026, 9, 20))
+    with pytest.raises(ValueError, match="end date is before"):
+        db.set_equalise(con, pid, start=date(2026, 10, 3), end=date(2026, 10, 2))
+    with pytest.raises(ValueError, match="more than the last drying"):
+        db.set_equalise(con, pid, start=date(2026, 10, 1), end=date(2026, 10, 5), end_gross_g=2500)
+    with pytest.raises(ValueError, match="start date as well"):
+        db.set_equalise(con, pid, end=date(2026, 10, 5))
+    db.set_equalise(con, pid, start=date(2026, 10, 1))
+    with pytest.raises(ValueError, match="start and end"):
+        db.lock_equalise(con, pid)
+    db.set_equalise(con, pid, start=date(2026, 10, 1), end=date(2026, 10, 5), end_gross_g=2040)
+    db.lock_equalise(con, pid)
+    with pytest.raises(db.Locked):
+        db.set_equalise(con, pid, start=date(2026, 10, 1))
+    db.set_equalise_note(con, pid, "even texture")       # notes still open
+
+
+def test_sensor_bounds(con):
+    ch = db.get_or_create_chamber(con, "Fridge drawer")
+    with pytest.raises(ValueError, match="Humidity"):
+        db.add_chamber_reading(con, ch, "2026-10-09T10:00", 3.0, 500)
+    with pytest.raises(ValueError, match="Temperature"):
+        db.add_chamber_reading(con, ch, "2026-10-09T10:00", 80, 75)
+    db.add_chamber_reading(con, ch, "2026-10-09T10:00", 3.1, 78)
+
+
+def test_actuals_edited(con):
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    assert not db.actuals_edited(con, pid)
+    db.set_actual(con, pid, 4, 4.2)
+    assert db.actuals_edited(con, pid)

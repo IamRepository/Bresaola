@@ -62,6 +62,8 @@ def act(fn, *a, success: str | None = None, **kw):
 
 
 con = get_con()
+if "photos_shrunk" not in st.session_state:          # one-off tidy-up of photos stored before v0.2.11
+    st.session_state["photos_shrunk"] = storage.shrink_existing_photos()
 
 # --------------------------------------------------------------------------- #
 # sidebar: projects, new project, backup
@@ -216,16 +218,25 @@ def photo_section(stage: str):
         with st.expander("Add photos to this step", expanded=not rows):
             with st.form(f"photo{pid}{stage}", clear_on_submit=True, border=False):
                 c1, c2, c3 = st.columns([3, 1, 2], vertical_alignment="bottom")
-                files = c1.file_uploader("Photos", type=["jpg", "jpeg", "png", "webp"],
+                files = c1.file_uploader("Photos", type=storage.UPLOAD_TYPES,
                                          accept_multiple_files=True, label_visibility="collapsed")
                 taken = c2.date_input("Taken on", value=db.today(), format="DD/MM/YYYY")
                 cap = c3.text_input("Caption", placeholder="optional")
                 if st.form_submit_button("Upload") and files:
+                    added, failed = 0, []
                     with con:
                         for f in files:
-                            db.add_photo(con, pid, storage.save_photo(pid, f.name, f.getvalue()),
-                                         taken, cap or None, stage=stage)
-                    st.session_state["flash"] = f"{len(files)} photo(s) added to {STAGE_NAME[stage]}"
+                            try:
+                                rel = storage.save_photo(pid, f.name, f.getvalue())   # shrunk to 1600 px
+                            except ValueError:
+                                failed.append(f.name)
+                                continue
+                            db.add_photo(con, pid, rel, taken, cap or None, stage=stage)
+                            added += 1
+                    if failed:
+                        st.session_state["flash_error"] = "Not a readable photo: " + ", ".join(failed)
+                    if added:
+                        st.session_state["flash"] = f"{added} photo(s) added to {STAGE_NAME[stage]}"
                     st.rerun()
 
 
@@ -250,12 +261,28 @@ with tabs[0]:
                           help="Adds 1 % EcoCure #2 and lowers the salt by half its weight, "
                                "so total salt stays at 3 %.")
         if not locked:
-            if new_b != p["blend"]:
-                act(db.change_blend, pid, new_b, success=f"Blend changed to {new_b}")
-            elif new_w != p["green_weight_g"] or new_e != bool(p["ecocure"]):
-                act(db.update_spice_inputs, pid, green_weight_g=new_w, ecocure=new_e,
-                    success="Plan recalculated; actual amounts reset to the plan")
-            st.caption("Changing blend, weight or EcoCure recalculates the plan and resets actual amounts.")
+            changed = (new_b != p["blend"] or new_w != p["green_weight_g"]
+                       or new_e != bool(p["ecocure"]))
+
+            def apply_recipe_change(con_, pid_):
+                if new_b != p["blend"]:
+                    db.change_blend(con_, pid_, new_b)
+                db.update_spice_inputs(con_, pid_, green_weight_g=new_w, ecocure=new_e)
+
+            if changed and not db.actuals_edited(con, pid):
+                act(apply_recipe_change, pid, success="Plan recalculated")
+            elif changed:
+                st.warning("You have entered actual amounts or notes. Changing blend, weight or EcoCure "
+                           "recalculates the plan and **replaces them with the new plan**.")
+                c1, c2, _ = st.columns([1.6, 1, 2])
+                if c1.button("Recalculate and reset", type="primary", key=f"rc_ok{pid}", width="stretch"):
+                    act(apply_recipe_change, pid, success="Plan recalculated; actual amounts reset")
+                if c2.button("Keep my amounts", key=f"rc_no{pid}", width="stretch"):
+                    for k_ in (f"b{pid}", f"w{pid}", f"e{pid}"):
+                        st.session_state.pop(k_, None)          # widgets go back to the saved values
+                    st.rerun()
+            else:
+                st.caption("Changing blend, weight or EcoCure recalculates the plan.")
         elif not closed:
             st.caption("Locked. Unlock below to change blend, weight or EcoCure.")
 
@@ -521,7 +548,7 @@ def save_weigh_in(r: dict, confirmed: bool = False) -> None:
                 db.add_chamber_reading(con, p["chamber_id"], datetime.combine(
                     r["day"], db.now_local().time()).isoformat(timespec="minutes"), r["temp"], r["rh"])
             if r["photo"]:
-                rel = storage.save_photo(pid, *r["photo"])
+                rel = storage.save_photo(pid, *r["photo"])   # raises ValueError if unreadable
                 db.add_photo(con, pid, rel, r["day"], r["note"] or f"Weigh-in {r['weight']:.0f} g",
                              rid, stage="dry")
     except (db.Locked, ValueError) as e:
@@ -540,8 +567,9 @@ with tabs[2]:
             c1, c2, c3 = st.columns(3)
             ds = c1.date_input("Drying start", value=d(p["cure_end_actual"]) or db.today(), format="DD/MM/YYYY",
                                help="Defaults to the day the meat came out of the bag")
-            sg = c2.number_input("Start weight incl. wrap + net [g]", min_value=1.0,
-                                 value=float(p["green_weight_g"]), step=1.0)
+            sg = c2.number_input("Start weight incl. wrap + net [g]", min_value=1.0, value=None,
+                                 step=1.0, format="%.0f", placeholder="weigh it now",
+                                 help="Weigh the piece after wrapping and netting, before hanging it")
             tp = c3.number_input("Target loss [%]", min_value=1.0, max_value=70.0, value=35.0, step=1.0)
             c4, c5 = st.columns(2)
             tare = c4.number_input("Packaging weight: wrap + net [g]", min_value=0.0, value=0.0, step=1.0)
@@ -550,6 +578,9 @@ with tabs[2]:
             ch_name = st.selectbox("Drying chamber", names + ["+ New chamber"]) if names else "+ New chamber"
             new_ch = st.text_input("New chamber name", value="Fridge drawer") if ch_name == "+ New chamber" else None
             if st.form_submit_button("Start drying", type="primary", disabled=closed):
+                if sg is None:
+                    st.error("Enter the start weight: weigh the piece with wrap and net.")
+                    st.stop()
                 with con:
                     ch = db.get_or_create_chamber(con, new_ch or ch_name)
                 act(db.set_drying, pid, start=ds, start_gross_g=sg, chamber_id=ch, tare_g=tare,
@@ -599,10 +630,12 @@ with tabs[2]:
                 rw = c2.number_input("Weight incl. wrap + net [g]", min_value=1.0,
                                      value=float(s["latest_gross_g"]), step=1.0)
                 c3, c4 = st.columns(2)
-                rt = c3.number_input("Chamber temperature [°C]", value=None, step=0.1, placeholder="optional")
-                rh = c4.number_input("Chamber humidity [%]", value=None, step=1.0, placeholder="optional")
+                rt = c3.number_input("Chamber temperature [°C]", value=None, step=0.1, placeholder="optional",
+                                     min_value=db.TEMP_RANGE[0], max_value=db.TEMP_RANGE[1])
+                rh = c4.number_input("Chamber humidity [%]", value=None, step=1.0, placeholder="optional",
+                                     min_value=db.RH_RANGE[0], max_value=db.RH_RANGE[1])
                 rn = st.text_input("Note", placeholder="optional: smell, firmness, mould ...")
-                ph = st.file_uploader("Photo", type=["jpg", "jpeg", "png", "webp"])
+                ph = st.file_uploader("Photo", type=storage.UPLOAD_TYPES)
                 if st.form_submit_button("Save weigh-in", type="primary", disabled=d_locked):
                     errors, warns = db.reading_problems(con, pid, rd, rw)
                     pending = dict(day=rd, weight=rw, temp=rt, rh=rh, note=rn or None,
@@ -693,22 +726,80 @@ with tabs[2]:
 # --------------------------------------------------------------------------- #
 
 with tabs[3]:
-    st.caption("Optional. Vacuum-seal after reaching the target weight and rest in the fridge so moisture "
-               "evens out between the surface and the centre.")
-    with st.form(f"eq{pid}"):
-        c1, c2, c3 = st.columns(3)
-        use_start = c1.checkbox("Started", value=bool(p["equalise_start"]))
-        es = c1.date_input("Start", value=d(p["equalise_start"]) or d(p["dry_end"]) or db.today(), format="DD/MM/YYYY")
-        use_end = c2.checkbox("Finished", value=bool(p["equalise_end"]))
-        ee = c2.date_input("End", value=d(p["equalise_end"]) or db.today(), format="DD/MM/YYYY")
-        ew = c3.number_input("Weight at end [g]", min_value=0.0, value=float(p["equalise_end_gross_g"] or 0), step=1.0)
-        en = st.text_area("Notes", value=p["equalise_note"] or "", height=80)
-        if st.form_submit_button("Save", type="primary", disabled=closed):
-            act(db.set_equalise, pid, start=es if use_start else None, end=ee if use_end else None,
-                end_gross_g=ew or None, note=en or None, success="Saved")
-    if p["equalise_start"]:
-        end = d(p["equalise_end"]) or db.today()
-        st.metric("Days equalising", (end - d(p["equalise_start"])).days)
+    e_locked = bool(p["equalise_locked_at"]) or closed
+    ek = f"eq{pid}_"
+    if not p["dry_start"]:
+        st.info("Equalising comes after drying. Start drying first.")
+    else:
+        st.caption("Optional. After reaching the target weight, vacuum-seal the piece and rest it in the "
+                   "fridge so moisture evens out between the surface and the centre. Skip it by leaving "
+                   "the start date empty.")
+        last_dry = db.readings(con, pid)[-1] if db.readings(con, pid) else None
+        es = st.session_state.get(ek + "start", d(p["equalise_start"]))
+        ee = st.session_state.get(ek + "end", d(p["equalise_end"]))
+        ew = st.session_state.get(ek + "w", p["equalise_end_gross_g"])
+
+        # band
+        days = (( ee or db.today()) - es).days if es else None
+        w0 = last_dry[1] if last_dry else None
+        change = f"{ew - w0:+.0f} g" if (ew and w0) else "–"
+        st.markdown(f"""
+<div class="cureband"><div class="grid">
+  <div><div class="lab">Started</div><div class="val">{f"{es:%d %b %Y}" if es else "Not started"}</div>
+       <div class="sub">vacuum-sealed</div></div>
+  <div><div class="lab">Ended</div><div class="val">{f"{ee:%d %b %Y}" if ee else ("In progress" if es else "–")}</div>
+       <div class="sub">out of the bag</div></div>
+  <div><div class="lab">Days</div><div class="val">{f"{days} days" if days is not None else "–"}</div>
+       <div class="sub">{"so far" if es and not ee else "&nbsp;"}</div></div>
+  <div><div class="lab">Weight before</div><div class="val">{f"{w0:.0f} g" if w0 else "–"}</div>
+       <div class="sub">last drying weigh-in</div></div>
+  <div><div class="lab">Weight after</div><div class="val">{f"{ew:.0f} g" if ew else "–"}</div>
+       <div class="sub">incl. wrap + net</div></div>
+  <div><div class="lab">Change</div><div class="val">{change}</div>
+       <div class="sub">usually small: the bag keeps moisture in</div></div>
+</div></div>""", unsafe_allow_html=True)
+
+        with st.container(border=True):
+            c1, c2, c3 = st.columns(3)
+            c1.date_input("Into the vacuum bag", value=d(p["equalise_start"]), format="DD/MM/YYYY",
+                          key=ek + "start", disabled=e_locked, help="Leave empty to skip equalising")
+            c2.date_input("Out of the bag", value=d(p["equalise_end"]), format="DD/MM/YYYY",
+                          key=ek + "end", disabled=e_locked, help="Leave empty while it is still resting")
+            c3.number_input("Weight after [g]", min_value=1.0, step=1.0, format="%.0f",
+                            value=float(p["equalise_end_gross_g"]) if p["equalise_end_gross_g"] else None,
+                            placeholder="optional", key=ek + "w", disabled=e_locked)
+            problems = db.equalise_problems(con, pid, es, ee, ew) if not e_locked else []
+            for msg_ in problems:
+                st.error(msg_)
+
+        enote = st.text_area("Notes", value=p["equalise_note"] or "", height=90, key=ek + "note",
+                             disabled=closed, placeholder="e.g. firmer at the edges before, even after 3 weeks")
+        dirty = ((es.isoformat() if es else None, ee.isoformat() if ee else None, ew)
+                 != (p["equalise_start"], p["equalise_end"], p["equalise_end_gross_g"]))
+        note_dirty = (enote.strip() or None) != p["equalise_note"]
+
+        if closed:
+            pass
+        elif not p["equalise_locked_at"]:
+            def save_eq(con_, pid_):
+                db.set_equalise(con_, pid_, start=es, end=ee, end_gross_g=ew, note=enote.strip() or None)
+
+            def save_and_lock(con_, pid_):
+                save_eq(con_, pid_); db.lock_equalise(con_, pid_)
+
+            b1, b2, b3 = st.columns([1.2, 1.8, 4], vertical_alignment="center")
+            if b1.button("Save", disabled=not (dirty or note_dirty) or bool(problems), key=ek + "save",
+                         width="stretch"):
+                act(save_eq, pid, success="Equalising saved")
+            if b2.button("Done: lock equalising", type="primary", key=ek + "lock", width="stretch",
+                         disabled=not (es and ee) or bool(problems)):
+                act(save_and_lock, pid, success="Equalising locked")
+            if dirty or note_dirty:
+                b3.caption("Unsaved changes")
+        else:
+            if st.button("Save notes", key=ek + "savenote", disabled=not note_dirty):
+                act(db.set_equalise_note, pid, enote.strip(), success="Notes saved")
+            unlock_panel("equalise", p["equalise_locked_at"], db.unlock_equalise, "Equalising")
 
     photo_section("equalise")
 
