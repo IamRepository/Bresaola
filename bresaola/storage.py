@@ -49,6 +49,8 @@ def shrink_image(data: bytes) -> bytes:
     try:
         im = Image.open(io.BytesIO(data))
         im = ImageOps.exif_transpose(im)
+    except Image.DecompressionBombError:
+        raise ValueError("This photo is too large (over ~180 megapixels). Resize it first.") from None
     except (UnidentifiedImageError, OSError):
         raise ValueError("This file is not a photo the app can read (JPG, PNG, WEBP or HEIC)") from None
     if im.mode not in ("RGB", "L"):

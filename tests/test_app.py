@@ -161,6 +161,8 @@ def test_day0_notes_editable_after_lock(app, tmp_path):
 
 
 def test_changing_weight_asks_before_resetting_actuals(app, tmp_path):
+    goto(app, "cure")
+    unlock(app, "cure")              # day 0 can only be unlocked once the cure is
     goto(app, "day0")
     unlock(app, "spice")
     next(n for n in app.number_input if n.label == "Meat weight after trimming [g]").set_value(2000)
@@ -173,6 +175,8 @@ def test_changing_weight_asks_before_resetting_actuals(app, tmp_path):
 
 
 def test_ecocure_toggle(app):
+    goto(app, "cure")
+    unlock(app, "cure")              # day 0 can only be unlocked once the cure is
     goto(app, "day0")
     unlock(app, "spice")
     next(t for t in app.toggle if t.label == "EcoCure #2").set_value(True)

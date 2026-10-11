@@ -313,6 +313,8 @@ def lock_spice(con, pid: int) -> None:
 
 def unlock_spice(con, pid: int, reason: str) -> None:
     _require_open(con, pid)
+    if project(con, pid)["cure_locked_at"]:
+        raise Locked("The cure is locked. Unlock the cure first, then day 0.")
     con.execute("UPDATE project SET spice_locked_at=NULL WHERE id=?", (pid,))
     log(con, pid, "spice_unlocked", reason)
 
@@ -325,8 +327,18 @@ def ingredient_lines(con, pid: int) -> list[sqlite3.Row]:
 def set_cure(con, pid: int, *, shape: str, thickness_cm: float, start, length_cm=None,
              thickness_estimated=False, method=None, end_actual=None, note=None) -> None:
     _require_unlocked(con, pid, "cure")
-    if end_actual and date.fromisoformat(_iso(end_actual)) < date.fromisoformat(_iso(start)):
+    start_d = date.fromisoformat(_iso(start))
+    end_d = date.fromisoformat(_iso(end_actual)) if end_actual else None
+    if start_d > today():
+        raise ValueError("'Into the bag' is in the future")
+    if end_d and end_d > today():
+        raise ValueError("'Taken out of the bag' is in the future")
+    if end_d and end_d < start_d:
         raise ValueError("'Taken out of the bag' cannot be before 'Into the bag'")
+    dry_start = project(con, pid)["dry_start"]
+    if dry_start and (end_d is None or end_d.isoformat() > dry_start):
+        raise ValueError(f"Drying started on {date.fromisoformat(dry_start):%d %b %Y}; "
+                         "'Taken out of the bag' must be on or before that day")
     planned = calc.cure_end_date(date.fromisoformat(_iso(start)), thickness_cm, shape)
     con.execute("""UPDATE project SET shape=?, thickness_cm=?, length_cm=?, thickness_estimated=?,
                    cure_method=?, cure_start=?, cure_end_planned=?, cure_end_actual=?, cure_note=?
@@ -343,6 +355,8 @@ def set_cure_note(con, pid: int, note: str | None) -> None:
 
 def lock_cure(con, pid: int) -> None:
     p = project(con, pid)
+    if not p["spice_locked_at"]:
+        raise Locked("Lock day 0 first")
     if not p["cure_end_actual"]:
         raise ValueError("Enter the date the meat came out of the bag before locking")
     con.execute("UPDATE project SET cure_locked_at=? WHERE id=?", (_now(), pid))
@@ -351,6 +365,8 @@ def lock_cure(con, pid: int) -> None:
 
 def unlock_cure(con, pid: int, reason: str) -> None:
     _require_open(con, pid)
+    if project(con, pid)["dry_locked_at"]:
+        raise Locked("Drying is locked. Unlock drying first, then the cure.")
     con.execute("UPDATE project SET cure_locked_at=NULL WHERE id=?", (pid,))
     log(con, pid, "cure_unlocked", reason)
 
@@ -364,13 +380,24 @@ def set_dry_note(con, pid: int, note: str | None) -> None:
 def lock_dry(con, pid: int, end_day) -> None:
     """Drying finished: record the end date and lock weigh-ins and settings."""
     _require_open(con, pid)
+    p = project(con, pid)
+    if not p["dry_start"]:
+        raise ValueError("Drying has not started")
+    end = date.fromisoformat(_iso(end_day))
+    if end < date.fromisoformat(p["dry_start"]):
+        raise ValueError(f"The end date is before drying started ({date.fromisoformat(p['dry_start']):%d %b %Y})")
+    last = con.execute("SELECT MAX(day) FROM reading WHERE project_id=?", (pid,)).fetchone()[0]
+    if last and end.isoformat() < last:
+        raise ValueError(f"The end date is before the last weigh-in ({date.fromisoformat(last):%d %b %Y})")
+    if end > today():
+        raise ValueError("The end date is in the future")
     con.execute("UPDATE project SET dry_end=?, dry_locked_at=? WHERE id=?", (_iso(end_day), _now(), pid))
     log(con, pid, "dry_locked", f"ended {_iso(end_day)}")
 
 
 def unlock_dry(con, pid: int, reason: str) -> None:
     _require_open(con, pid)
-    con.execute("UPDATE project SET dry_locked_at=NULL WHERE id=?", (pid,))
+    con.execute("UPDATE project SET dry_locked_at=NULL, dry_end=NULL WHERE id=?", (pid,))   # drying goes on
     log(con, pid, "dry_unlocked", reason)
 
 

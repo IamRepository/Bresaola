@@ -147,6 +147,7 @@ def test_old_database_gets_new_columns(tmp_path):
 
 def test_cure_and_dry_locks(con):
     pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    db.lock_spice(con, pid)
     db.set_cure(con, pid, shape="tubular", thickness_cm=10, start=date(2026, 8, 1))
     with pytest.raises(ValueError):
         db.lock_cure(con, pid)                       # needs an end date
@@ -245,6 +246,7 @@ def test_close_needs_all_steps_locked(con):
 def test_correct_drying_start_rome_case(con):
     # Rome: drying started "today" by mistake, cure actually ended 20 Sep
     pid = db.create_project(con, "Rome", "Classic Italian", False, 1838)
+    db.lock_spice(con, pid)
     db.set_cure(con, pid, shape="tubular", thickness_cm=17, start=date(2026, 8, 15),
                 end_actual=date(2026, 9, 20))
     db.lock_cure(con, pid)

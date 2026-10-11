@@ -173,19 +173,23 @@ with st.sidebar:
     labels = {p["id"]: db.display_name(p) + ("  (closed)" if p["status"] == "closed" else "") for p in projs}
     if projs:
         qp = st.query_params
-        if "p" in qp and "pid" not in st.session_state:      # coming back from a theme switch
+        if "p" in qp and "proj" not in st.session_state:     # coming back from a theme switch
             try:
-                st.session_state["pid"] = int(qp["p"])
+                st.session_state["pid_next"] = int(qp["p"])
                 if qp.get("s"):
                     st.session_state[f"step{int(qp['p'])}"] = qp["s"]
             except ValueError:
                 pass
         qp.clear()
-        default = st.session_state.get("pid", projs[0]["id"])
+        # The dropdown owns the current project (key "proj"). Other code asks for a switch by
+        # setting "pid_next"; it is applied here, before the dropdown is drawn. Never pass an
+        # index: a changing index gives the widget a new identity and drops the next pick.
         ids = list(labels)
-        pid = st.selectbox("Project", ids, index=ids.index(default) if default in ids else 0,
-                           format_func=labels.get)
-        st.session_state["pid"] = pid
+        if "pid_next" in st.session_state:
+            st.session_state["proj"] = st.session_state.pop("pid_next")
+        if st.session_state.get("proj") not in ids:
+            st.session_state["proj"] = ids[0]
+        pid = st.selectbox("Project", ids, key="proj", format_func=labels.get)
         sp = db.project(con, pid)
         with st.popover("Rename or delete", icon=":material/more_horiz:", width="stretch"):
             st.markdown('<p class="pop-h">Rename</p>', unsafe_allow_html=True)
@@ -202,7 +206,7 @@ with st.sidebar:
                 with con:
                     db.delete_project(con, pid)
                 storage.delete_project_photos(pid)
-                st.session_state.pop("pid", None)
+                st.session_state.pop("pid_next", None)          # falls back to the first project
                 st.session_state["flash"] = f"Deleted {sp['name']}"
                 st.rerun()
     else:
@@ -222,7 +226,7 @@ with st.sidebar:
                     try:
                         with con:
                             new = db.create_project(con, name.strip(), next(iter(BLENDS)), False, weight, start_d)
-                        st.session_state["pid"] = new
+                        st.session_state["pid_next"] = new
                         st.session_state[f"step{new}"] = "day0"
                         st.rerun()
                     except ValueError as e:
@@ -251,7 +255,7 @@ with st.sidebar:
                 con.close()
                 try:
                     storage.restore_backup(up.getvalue())
-                    st.session_state.pop("pid", None)
+                    st.session_state.pop("pid_next", None)
                     st.session_state["flash"] = "Backup restored. Previous data kept in 'before-restore'."
                 except ValueError as e:
                     st.session_state["flash_error"] = f"Nothing was changed. {e}"
@@ -296,6 +300,15 @@ done = {"day0": bool(p["spice_locked_at"]), "cure": bool(p["cure_locked_at"]),
 current = next((s for s in STEPS if not done[s]), "finish")
 
 
+def reopened(kind: str) -> bool:
+    """True if this step (spice, cure, dry) was locked and has since been unlocked for editing."""
+    ks = [e["kind"] for e in db.events(con, pid) if e["kind"] in (f"{kind}_locked", f"{kind}_unlocked")]
+    return bool(ks) and ks[-1] == f"{kind}_unlocked"
+
+
+REOPENED = {"day0": reopened("spice"), "cure": reopened("cure")}
+
+
 WEIGH_EVERY = 7          # days; weigh-ins are roughly weekly, the reminder shows after 6 days
 
 
@@ -308,6 +321,8 @@ def step_status(s: str) -> tuple[str, str, str, bool]:
     state: done, now (the step to work on) or wait."""
     state = "done" if done[s] else ("now" if s == current else "wait")
     today = db.today()
+    if s in REOPENED and REOPENED[s] and not done[s]:
+        return state, "unlocked for editing", "press Done to lock it again", True
     if s == "day0":
         if done[s]:
             return state, short(d(p["start_date"])) + " " + d(p["start_date"]).strftime("%Y"), "spiced and bagged", False
@@ -391,6 +406,10 @@ def next_action() -> tuple[str | None, bool]:
     sentence is None when there is nothing to do today (drying, weighed within the week)."""
     if closed:
         return "This batch is closed. Everything is read-only.", True
+    if current in REOPENED and REOPENED[current]:
+        name = TITLE[current].split(":")[0]
+        return (f"<b>{name} is unlocked for editing.</b> Make your corrections, then press <b>Done</b> "
+                "to lock it again.", False)
     if current == "day0":
         return ("<b>Day 0:</b> weigh the trimmed meat, choose the blend, weigh out the spices, measure the "
                 "piece and seal it in the bag. Then press <b>Done</b>.", False)
@@ -492,6 +511,10 @@ def unlock_panel(step: str, locked_at: str, unlock_fn, label: str):
         when = locked_at[:16].replace("T", " ")
     st.caption(f"{label} locked on {when}. "
                "Notes and photos can still be added.")
+    blocker = {"spice": ("cure_locked_at", "the cure"), "cure": ("dry_locked_at", "drying")}.get(step)
+    if blocker and p[blocker[0]]:
+        st.caption(f"To edit {label.lower()}, unlock {blocker[1]} first: the steps after it depend on it.")
+        return
     with st.expander(f"Unlock {label.lower()} to edit"):
         reason = st.text_input("Reason (saved in history)", key=f"unl{step}{pid}")
         if st.button(f"Unlock {label.lower()}", disabled=not reason.strip(), key=f"unlb{step}{pid}"):
@@ -507,6 +530,7 @@ def step_day0():
     locked = bool(p["spice_locked_at"]) or closed
     piece_locked = locked or bool(p["cure_locked_at"])
     lines = db.ingredient_lines(con, pid)
+    pending = False                       # True while the "reset my amounts?" question is open
 
     blk("1 · The meat and the recipe")
     with st.container(border=True):
@@ -529,6 +553,7 @@ def step_day0():
             if changed and not db.actuals_edited(con, pid):
                 act(apply_recipe_change, pid, success="Plan recalculated")
             elif changed:
+                pending = True
                 st.warning("You have entered actual amounts or notes. Changing blend, weight or EcoCure "
                            "recalculates the plan and **replaces them with the new plan**.")
                 c1, c2, _ = st.columns([1.6, 1, 2])
@@ -564,8 +589,10 @@ def step_day0():
     weighed = [l for l in lines if l["unit"] == "pct"]
     counted = [l for l in lines if l["unit"] == "per_kg"]
     ver = p["spice_locked_at"] or ""
-    ed_w = table(weighed, "%", "g", f"sw{pid}{ver}{p['ecocure']}{p['green_weight_g']}")
-    ed_c = table(counted, "pcs / kg", "pcs", f"sc{pid}{ver}{p['green_weight_g']}") if counted else None
+    # the key changes whenever the plan is rewritten, so unsaved edits never land on other rows
+    plan_id = f"{pid}{ver}{p['blend']}{p['ecocure']}{p['green_weight_g']}"
+    ed_w = table(weighed, "%", "g", f"sw{plan_id}")
+    ed_c = table(counted, "pcs / kg", "pcs", f"sc{plan_id}") if counted else None
 
     acts = []
     for rows, ed, u in ((weighed, ed_w, "g"), (counted, ed_c, "pcs")):
@@ -650,10 +677,13 @@ def step_day0():
         return
     if not p["spice_locked_at"]:
         b1, b2, _ = st.columns([1.2, 2.2, 3])
-        if b1.button("Save", key=f"save_day0{pid}", width="stretch"):
+        if b1.button("Save", key=f"save_day0{pid}", width="stretch", disabled=pending):
             act(save_all, pid, success="Saved")
-        if b2.button("Done: lock day 0 and start curing", type="primary", key=f"done_day0{pid}", width="stretch"):
+        if b2.button("Done: lock day 0 and start curing", type="primary", key=f"done_day0{pid}",
+                     width="stretch", disabled=pending):
             act(save_and_lock, pid, success="Day 0 locked. Curing has started.", goto="cure")
+        if pending:
+            st.caption("Answer the question under *1 · The meat and the recipe* first.")
     else:
         unlock_panel("spice", p["spice_locked_at"], db.unlock_spice, "Day 0")
 
@@ -663,6 +693,9 @@ def step_day0():
 # --------------------------------------------------------------------------- #
 
 def step_cure():
+    if not p["spice_locked_at"] and not p["cure_locked_at"]:
+        st.info("Lock day 0 first: press **Done** on day 0. The cure starts from the bag date entered there.")
+        return
     if not p["cure_start"] or not p["thickness_cm"]:
         st.info("Finish day 0 first: the cure time comes from the piece's thickness and the bag date.")
         return
