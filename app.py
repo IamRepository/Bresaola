@@ -17,7 +17,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from bresaola import __version__, calc, db, storage
+from bresaola import __version__, calc, db, report, storage
 from bresaola.blends import BLENDS
 from bresaola.demo import seed_demo
 
@@ -1025,6 +1025,15 @@ def step_finish():
     else:
         st.info("The result appears here once drying has started.")
 
+    blk("PDF summary")
+    c1, c2 = st.columns([1.3, 3], vertical_alignment="center")
+    c1.download_button("Download PDF summary" if closed else "Download summary so far (PDF)",
+                       lambda pid_=pid: report.build_pdf_standalone(pid_),   # built on click, in another thread
+                       file_name=report.file_name(p), mime="application/pdf",
+                       key=f"pdf{pid}", type="primary" if closed else "secondary", width="stretch")
+    c2.caption("Result, timeline, recipe, cure, drying chart and weigh-ins, notes and photos. "
+               + ("" if closed else "Download it again after closing for the final version."))
+
     if closed:
         st.success(f"Closed on {fmt_date(p['closed_at'][:10])}. This project is read-only.")
         if p["final_notes"]:
@@ -1035,7 +1044,7 @@ def step_finish():
         missing = db.close_problems(con, pid)
         if missing:
             st.info("Before this batch can be closed: " + "; ".join(missing) + ".")
-        st.caption("Closing makes the project read-only. The PDF summary arrives in a later version.")
+        st.caption("Closing makes the project read-only. The PDF summary above then becomes the final version.")
         with st.form(f"close{pid}"):
             fn = st.text_area("Final notes: texture, taste, what to change next time", height=120)
             sure = st.checkbox("I understand the project becomes read-only")

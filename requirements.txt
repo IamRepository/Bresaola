@@ -6,3 +6,5 @@ pillow>=10
 pillow-heif>=0.18
 pytest>=8
 tzdata
+reportlab>=4.0
+pypdf>=4.0
