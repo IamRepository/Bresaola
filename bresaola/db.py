@@ -173,6 +173,11 @@ def connect(path: str | Path) -> sqlite3.Connection:
                     con.execute("UPDATE project SET equalise_locked_at = equalise_end || 'T00:00:00' "
                                 "WHERE equalise_end IS NOT NULL")
     con.execute("UPDATE project SET start_date = substr(created_at, 1, 10) WHERE start_date IS NULL")
+    # v0.2 had a separate cure "Method" field; fold it into the cure notes once
+    con.execute("""UPDATE project SET cure_note = CASE WHEN cure_note IS NULL OR cure_note = ''
+                       THEN cure_method ELSE cure_method || char(10) || cure_note END,
+                       cure_method = NULL
+                   WHERE cure_method IS NOT NULL AND cure_method != ''""")
     con.commit()
     return con
 
@@ -665,7 +670,8 @@ def close_problems(con, pid: int) -> list[str]:
         out.append("lock the cure")
     if not p["dry_locked_at"]:
         out.append("lock drying")
-    if p["equalise_start"] and not p["equalise_locked_at"]:
+    # Equalise has no screen (backlog); a start date left from v0.2.11 must not block closing
+    if os.environ.get("BRESAOLA_EQUALISE") == "1" and p["equalise_start"] and not p["equalise_locked_at"]:
         out.append("lock equalising (or clear its start date if you skipped it)")
     return out
 

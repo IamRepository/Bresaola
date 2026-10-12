@@ -250,12 +250,14 @@ with st.sidebar:
                            mime="application/zip", width="stretch")
         with st.popover("Restore backup", width="stretch"):
             st.caption("Replaces **all** projects and photos with the contents of the backup.")
-            up = st.file_uploader("Backup file (.zip)", type="zip", key="restore")
+            up = st.file_uploader("Backup file (.zip)", type="zip",
+                                  key=f"restore{st.session_state.get('restore_n', 0)}")
             if st.button("Replace all data", type="primary", disabled=up is None, width="stretch"):
                 con.close()
                 try:
                     storage.restore_backup(up.getvalue())
                     st.session_state.pop("pid_next", None)
+                    st.session_state["restore_n"] = st.session_state.get("restore_n", 0) + 1   # empty uploader
                     st.session_state["flash"] = "Backup restored. Previous data kept in 'before-restore'."
                 except ValueError as e:
                     st.session_state["flash_error"] = f"Nothing was changed. {e}"
@@ -343,9 +345,11 @@ def step_status(s: str) -> tuple[str, str, str, bool]:
         st_ = db.drying_status(con, pid)
         lost = calc.loss_pct(p["dry_start_gross_g"], st_["latest_gross_g"], p["tare_g"])
         end = d(p["dry_end"]) if p["dry_end"] else today
-        main = f"day {(end - d(p['dry_start'])).days} · {lost:.1f} % of {p['target_loss_pct']:.0f} % lost"
+        main = f"day {(end - d(p['dry_start'])).days} · {lost:.1f} % of {p['target_loss_pct']:g} % lost"
         if done[s]:
             return state, main, "target reached" if st_["progress"] >= 1 else "ended", False
+        if st_["progress"] >= 1:
+            return state, main, "target reached: press Done", False
         last = db.readings(con, pid)[-1][0]
         due = last + timedelta(days=WEIGH_EVERY)
         if due <= today:
@@ -355,7 +359,7 @@ def step_status(s: str) -> tuple[str, str, str, bool]:
         return state, f"closed {short(d(p['closed_at'][:10]))}", "read-only", False
     if state == "now":
         return state, "tasting notes", "then close the batch", False
-    return state, "after drying", f"at {p['target_loss_pct']:.0f} % weight loss" if p["dry_start"] else "", False
+    return state, "after drying", f"at {p['target_loss_pct']:g} % weight loss" if p["dry_start"] else "", False
 
 
 STATE_LABEL = {"done": "Done", "now": "Now", "wait": "Next"}
@@ -413,6 +417,9 @@ def next_action() -> tuple[str | None, bool]:
     if current == "day0":
         return ("<b>Day 0:</b> weigh the trimmed meat, choose the blend, weigh out the spices, measure the "
                 "piece and seal it in the bag. Then press <b>Done</b>.", False)
+    if current == "cure" and not (p["cure_start"] and p["thickness_cm"]):
+        return ("<b>Day 0 is locked, but the bag date and thickness are missing.</b> Unlock day 0, "
+                "add them under <i>3 · Measure the piece</i> and press <b>Done</b> again.", False)
     if current == "cure":
         planned = calc.cure_end_date(d(p["cure_start"]), p["thickness_cm"], p["shape"])
         left = (planned - db.today()).days
@@ -535,8 +542,9 @@ def step_day0():
     blk("1 · The meat and the recipe")
     with st.container(border=True):
         c1, c2, c3 = st.columns([3, 2, 2], vertical_alignment="bottom")
-        new_b = c1.selectbox("Blend", list(BLENDS), index=list(BLENDS).index(p["blend"]),
-                             key=f"b{pid}", disabled=locked)
+        blend_opts = list(BLENDS) if p["blend"] in BLENDS else [p["blend"]] + list(BLENDS)
+        new_b = c1.selectbox("Blend", blend_opts, index=blend_opts.index(p["blend"]), key=f"b{pid}",
+                             disabled=locked, format_func=lambda b: b if b in BLENDS else f"{b} (saved recipe)")
         new_w = c2.number_input("Meat weight after trimming [g]", min_value=1.0, step=1.0, format="%.0f",
                                 value=float(p["green_weight_g"]), key=f"w{pid}", disabled=locked)
         new_e = c3.toggle("EcoCure #2", value=bool(p["ecocure"]), key=f"e{pid}", disabled=locked,
@@ -697,7 +705,9 @@ def step_cure():
         st.info("Lock day 0 first: press **Done** on day 0. The cure starts from the bag date entered there.")
         return
     if not p["cure_start"] or not p["thickness_cm"]:
-        st.info("Finish day 0 first: the cure time comes from the piece's thickness and the bag date.")
+        st.info("The bag date and thickness are missing. Unlock day 0, add them under "
+                "*3 · Measure the piece* and press **Done** again." if p["spice_locked_at"] else
+                "Finish day 0 first: the cure time comes from the piece's thickness and the bag date.")
         return
     c_locked = bool(p["cure_locked_at"]) or closed
     k = f"cure{pid}_"
@@ -748,8 +758,7 @@ def step_cure():
         if end_act and end_act < start:
             st.error("'Taken out of the bag' is before 'Into the bag'. Check the date.")
 
-    old_note = "\n".join(x for x in (p["cure_method"], p["cure_note"]) if x)
-    note = journal("cure", old_note, db.set_cure_note,
+    note = journal("cure", p["cure_note"], db.set_cure_note,
                    "Method and exceptions, e.g. flipped daily; missed a flip on day 12")
 
     def save_cure(con_, pid_):
@@ -824,10 +833,16 @@ def step_dry_start():
             if sg is None:
                 st.error("Enter the start weight: weigh the piece with wrap and net.")
                 return
-            with con:
-                ch = db.get_or_create_chamber(con, new_ch or ch_name)
-            act(db.set_drying, pid, start=ds, start_gross_g=sg, chamber_id=ch, tare_g=tare,
-                tare_estimated=tare_est, target_loss_pct=tp, success="Drying started")
+            ch_label = (new_ch or "").strip() if ch_name == "+ New chamber" else ch_name
+            if not ch_label:
+                st.error("Give the new drying chamber a name, e.g. Fridge drawer.")
+                return
+
+            def start_drying(con_, pid_):          # one transaction: no stray chamber if drying fails
+                ch = db.get_or_create_chamber(con_, ch_label)
+                db.set_drying(con_, pid_, start=ds, start_gross_g=sg, chamber_id=ch, tare_g=tare,
+                              tare_estimated=tare_est, target_loss_pct=tp)
+            act(start_drying, pid, success="Drying started")
 
 
 def step_dry():
@@ -888,9 +903,15 @@ def step_dry():
     m[1].metric("Target weight", f"{s['target_gross_g']:.0f} g", help=f"{p['target_loss_pct']:g} % loss on meat")
     m[2].metric("Weight lost", f"{s['loss_pct']:.1f} %")
     m[3].metric("Progress to target", f"{min(s['progress'], 1)*100:.0f} %")
-    m[4].metric("Earliest finish", f"{eta.eta_date:%d %b}" if eta else "–",
-                help=(f"Straight line through all weigh-ins ({eta.grams_per_day:.1f} g/day). "
-                      "Drying slows down over time, so expect later." if eta else "Needs 2+ weigh-ins"))
+    if s["progress"] >= 1:
+        eta_txt, eta_help = "Reached", "The latest weigh-in is at or below the target weight."
+    elif eta:
+        eta_txt = eta.eta_date.strftime("%d %b" if eta.eta_date.year == db.today().year else "%d %b %Y")
+        eta_help = (f"Straight line through all weigh-ins ({eta.grams_per_day:.1f} g/day). "
+                    "Drying slows down over time, so expect later.")
+    else:
+        eta_txt, eta_help = "–", "Needs 2+ weigh-ins"
+    m[4].metric("Earliest finish", eta_txt, help=eta_help)
     st.progress(min(max(s["progress"], 0.0), 1.0))
 
     # --- what happened ---------------------------------------------------------- #
@@ -899,7 +920,8 @@ def step_dry():
     line = alt.Chart(rdf).mark_line(point=True, color=RED).encode(
         x=alt.X("Date:T", title=None),
         y=alt.Y("Weight (g):Q", title="Weight incl. wrap + net [g]", scale=alt.Scale(
-            zero=False, domain=[s["target_gross_g"] * 0.97, s["start_gross_g"] * 1.01])),
+            zero=False, domain=[min(s["target_gross_g"], rdf["Weight (g)"].min()) * 0.97,
+                                max(s["start_gross_g"], rdf["Weight (g)"].max()) * 1.01])),
         tooltip=[alt.Tooltip("Date:T", format="%d %b %Y"), "Weight (g):Q"])
     target = alt.Chart(pd.DataFrame({"t": [s["target_gross_g"]]})).mark_rule(
         strokeDash=[6, 4], color=INK).encode(y=alt.Y("t:Q", title="Weight incl. wrap + net [g]"))
@@ -985,9 +1007,10 @@ def step_finish():
         band([("Final weight" if p["dry_end"] else "Weight now", f"{final_g:.0f} g",
                "last weigh-in, incl. wrap + net"),
               ("Lost while drying", f"{lost:.0f} g",
-               f"{calc.loss_pct(p['dry_start_gross_g'], final_g, p['tare_g']):.1f} % of the start weight"),
-              ("Final ÷ raw meat" if p["dry_end"] else "Now ÷ raw meat", f"{100 * final_g / p['green_weight_g']:.0f} %",
-               f"raw {p['green_weight_g']:.0f} g; includes wrap + net"),
+               f"{calc.loss_pct(p['dry_start_gross_g'], final_g, p['tare_g']):.1f} % of the meat at the start of drying"),
+              ("Final ÷ raw meat" if p["dry_end"] else "Now ÷ raw meat",
+               f"{100 * (final_g - (p['tare_g'] or 0)) / p['green_weight_g']:.0f} %",
+               f"meat only, without wrap + net; raw {p['green_weight_g']:.0f} g"),
               ("Cure", f"{cure_days} days" if cure_days is not None else "–", "in the bag"),
               ("Drying", f"{dry_days} days", "so far" if not p["dry_end"] else "wrapped and netted"),
               ("Total", f"{total_days} days", "from day 0")])
@@ -995,7 +1018,7 @@ def step_finish():
         st.info("The result appears here once drying has started.")
 
     if closed:
-        st.success(f"Closed on {p['closed_at'][:10]}. This project is read-only.")
+        st.success(f"Closed on {fmt_date(p['closed_at'][:10])}. This project is read-only.")
         if p["final_notes"]:
             blk("Final notes")
             st.write(p["final_notes"])

@@ -229,11 +229,12 @@ def test_cure_end_before_start_refused(con):
                     end_actual=date(2026, 8, 1))
 
 
-def test_close_needs_all_steps_locked(con):
+def test_close_needs_all_steps_locked(con, monkeypatch):
     pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
     with pytest.raises(ValueError, match="lock the spice mix; lock the cure; lock drying"):
         db.close_project(con, pid)
     done = finished_project(con, "B")
+    monkeypatch.setenv("BRESAOLA_EQUALISE", "1")        # Equalise only counts when switched on
     db.set_equalise(con, done, start=date(2026, 10, 1))
     with pytest.raises(ValueError, match="lock equalising"):
         db.close_project(con, done)

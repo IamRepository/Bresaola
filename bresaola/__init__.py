@@ -1,2 +1,2 @@
 """Bresaola Tracker: record home-cured bresaola batches from spice mix to slicing."""
-__version__ = "0.3.5"
+__version__ = "0.3.6"
