@@ -206,9 +206,10 @@ def test_cure_band_and_locked_state(app, tmp_path):
 
 
 def test_cure_done_jumps_to_dry_start(app, tmp_path):
+    next(d for d in app.sidebar.date_input if d.label == "Start date").set_value(date(2026, 9, 1))
     new_project(app, "Rome", 1838)
     next(n for n in app.number_input if n.label == "Thickness [cm]").set_value(4.0)
-    next(d for d in app.date_input if d.label == "Into the bag").set_value(date(2026, 9, 1))
+    assert next(d for d in app.date_input if d.label == "Into the bag").value == date(2026, 9, 1)
     app.run()
     btn(app, "Done: lock day 0 and start curing").click()
     app.run(); ok(app)

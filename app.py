@@ -191,13 +191,21 @@ with st.sidebar:
             st.session_state["proj"] = ids[0]
         pid = st.selectbox("Project", ids, key="proj", format_func=labels.get)
         sp = db.project(con, pid)
-        with st.popover("Rename or delete", icon=":material/more_horiz:", width="stretch"):
+        with st.popover("Edit or delete", icon=":material/more_horiz:", width="stretch"):
             st.markdown('<p class="pop-h">Rename</p>', unsafe_allow_html=True)
             new_name = st.text_input("New name", value=sp["name"], key=f"rn{pid}", label_visibility="collapsed",
                                      help="The date in front comes from the start date and is added automatically.")
             if st.button("Rename", disabled=sp["status"] == "closed" or new_name.strip() in ("", sp["name"]),
                          key=f"rnb{pid}", width="stretch"):
                 act(db.rename_project, pid, new_name, success="Renamed")
+            st.markdown('<hr class="pop-sep"><p class="pop-h">Start date (day 0)</p>', unsafe_allow_html=True)
+            new_start = st.date_input("Day 0 date", value=d(sp["start_date"]), format="DD/MM/YYYY",
+                                      key=f"sd{pid}", label_visibility="collapsed",
+                                      disabled=sp["status"] == "closed")
+            st.caption("The day the meat was trimmed, spiced and bagged. Also the date in the project name.")
+            if st.button("Change start date", key=f"sdb{pid}", width="stretch",
+                         disabled=sp["status"] == "closed" or new_start == d(sp["start_date"])):
+                act(db.set_start_date, pid, new_start, success="Start date changed")
             st.markdown('<hr class="pop-sep"><p class="pop-h">Delete</p>', unsafe_allow_html=True)
             st.caption("Removes the project, its weigh-ins and photos for good. Download a backup first.")
             confirm = st.text_input(f"Type **{sp['name']}** to confirm", key=f"del{pid}")

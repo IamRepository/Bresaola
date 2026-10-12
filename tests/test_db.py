@@ -16,7 +16,7 @@ def con(tmp_path):
 
 
 def test_snapshot_survives_master_table_edit(con, monkeypatch):
-    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     from bresaola import blends
     monkeypatch.setitem(blends.BLENDS, "Spicy Calabrian", [("Only sugar", "pct", 0.5)])
     db.update_spice_inputs(con, pid, green_weight_g=1000)
@@ -25,7 +25,7 @@ def test_snapshot_survives_master_table_edit(con, monkeypatch):
 
 
 def test_weight_drives_plan_and_resets_actuals(con):
-    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     db.set_actual(con, pid, 4, 4.2)
     db.update_spice_inputs(con, pid, green_weight_g=1000)
     fennel = db.ingredient_lines(con, pid)[4]
@@ -33,7 +33,7 @@ def test_weight_drives_plan_and_resets_actuals(con):
 
 
 def test_lock_blocks_edits_and_unlock_is_logged(con):
-    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     db.lock_spice(con, pid)
     with pytest.raises(db.Locked):
         db.set_actual(con, pid, 0, 60)
@@ -46,7 +46,7 @@ def test_lock_blocks_edits_and_unlock_is_logged(con):
 
 
 def finished_project(con, name="A"):
-    pid = db.create_project(con, name, "Spicy Calabrian", False, 2088)
+    pid = db.create_project(con, name, "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     db.lock_spice(con, pid)
     db.set_cure(con, pid, shape="tubular", thickness_cm=10, start=date(2026, 8, 1),
                 end_actual=date(2026, 8, 13))
@@ -65,7 +65,7 @@ def test_closed_project_is_read_only(con):
 
 
 def test_target_change_logged(con):
-    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     db.set_drying(con, pid, start=date(2026, 9, 20), start_gross_g=2100)
     db.change_target(con, pid, 38, "firmer")
     assert db.project(con, pid)["target_loss_pct"] == 38
@@ -75,8 +75,8 @@ def test_target_change_logged(con):
 def test_two_projects_share_one_chamber(con):
     ch = db.get_or_create_chamber(con, "Fridge drawer")
     assert db.get_or_create_chamber(con, "Fridge drawer") == ch
-    a = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
-    b = db.create_project(con, "B", "Classic Italian", False, 1500)
+    a = db.create_project(con, "A", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
+    b = db.create_project(con, "B", "Classic Italian", False, 1500, start_date=date(2026, 8, 1))
     for p in (a, b):
         db.set_drying(con, p, start=date(2026, 9, 20), start_gross_g=2000, chamber_id=ch)
     db.add_chamber_reading(con, ch, "2026-10-08T20:00:00", 3.1, 78)
@@ -116,7 +116,7 @@ def test_timestamps_use_local_timezone(monkeypatch):
 
 def test_delete_project_removes_rows_but_keeps_chamber(con):
     ch = db.get_or_create_chamber(con, "Fridge drawer")
-    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     db.set_drying(con, pid, start=date(2026, 9, 20), start_gross_g=2100, chamber_id=ch)
     db.add_photo(con, pid, "photos/1/x.jpg", "2026-10-08")
     db.add_chamber_reading(con, ch, "2026-10-08T20:00", 3.0, 80)
@@ -146,7 +146,7 @@ def test_old_database_gets_new_columns(tmp_path):
 
 
 def test_cure_and_dry_locks(con):
-    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     db.lock_spice(con, pid)
     db.set_cure(con, pid, shape="tubular", thickness_cm=10, start=date(2026, 8, 1))
     with pytest.raises(ValueError):
@@ -185,17 +185,17 @@ def test_rename(con):
 # ---------------- audit bugs ----------------
 
 def test_duplicate_names_are_refused_politely(con):
-    db.create_project(con, "Rome", "Classic Italian", False, 1326)
-    b = db.create_project(con, "Palermo", "Spicy Calabrian", False, 2088)
+    db.create_project(con, "Rome", "Classic Italian", False, 1326, start_date=date(2026, 8, 1))
+    b = db.create_project(con, "Palermo", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     with pytest.raises(ValueError, match="already exists"):
-        db.create_project(con, "rome", "Classic Italian", False, 1000)   # case-insensitive
+        db.create_project(con, "rome", "Classic Italian", False, 1000, start_date=date(2026, 8, 1))   # case-insensitive
     with pytest.raises(ValueError, match="already exists"):
         db.rename_project(con, b, "Rome")
     db.rename_project(con, b, "Palermo")          # renaming to its own name is fine
 
 
 def test_weigh_in_checks(con):
-    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     db.set_drying(con, pid, start=date(2026, 9, 20), start_gross_g=2100, tare_g=30)
     db.add_reading(con, pid, date(2026, 9, 26), 2057)
     with pytest.raises(ValueError, match="before drying started"):
@@ -213,7 +213,7 @@ def test_weigh_in_checks(con):
 
 
 def test_same_date_weigh_in_needs_confirm(con):
-    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     db.set_drying(con, pid, start=date(2026, 9, 20), start_gross_g=2100)
     db.add_reading(con, pid, date(2026, 9, 26), 2057)
     with pytest.raises(ValueError, match="already a weigh-in"):
@@ -223,14 +223,14 @@ def test_same_date_weigh_in_needs_confirm(con):
 
 
 def test_cure_end_before_start_refused(con):
-    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     with pytest.raises(ValueError, match="cannot be before"):
         db.set_cure(con, pid, shape="tubular", thickness_cm=10, start=date(2026, 8, 15),
                     end_actual=date(2026, 8, 1))
 
 
 def test_close_needs_all_steps_locked(con, monkeypatch):
-    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     with pytest.raises(ValueError, match="lock the spice mix; lock the cure; lock drying"):
         db.close_project(con, pid)
     done = finished_project(con, "B")
@@ -246,7 +246,7 @@ def test_close_needs_all_steps_locked(con, monkeypatch):
 
 def test_correct_drying_start_rome_case(con):
     # Rome: drying started "today" by mistake, cure actually ended 20 Sep
-    pid = db.create_project(con, "Rome", "Classic Italian", False, 1838)
+    pid = db.create_project(con, "Rome", "Classic Italian", False, 1838, start_date=date(2026, 8, 1))
     db.lock_spice(con, pid)
     db.set_cure(con, pid, shape="tubular", thickness_cm=17, start=date(2026, 8, 15),
                 end_actual=date(2026, 9, 20))
@@ -296,7 +296,7 @@ def test_sensor_bounds(con):
 
 
 def test_actuals_edited(con):
-    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088)
+    pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     assert not db.actuals_edited(con, pid)
     db.set_actual(con, pid, 4, 4.2)
     assert db.actuals_edited(con, pid)

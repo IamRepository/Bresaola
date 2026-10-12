@@ -147,3 +147,42 @@ def test_blank_chamber_name_refused(env):
     assert not at.exception, at.exception
     assert any("chamber" in e.value.lower() for e in at.error)
     assert [c["name"] for c in db.chambers(env)] == []
+
+
+# ---- editable start date (v0.3.7) ---------------------------------------------------
+
+def test_start_date_change_moves_unlocked_bag_date(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "today", lambda: TODAY)
+    con = db.connect(tmp_path / "s.sqlite")
+    pid = db.create_project(con, "S", "Classic Italian", False, 1000, start_date=date(2026, 10, 5))
+    db.set_cure(con, pid, shape="flat", thickness_cm=4, start=date(2026, 10, 5))   # Save, not locked
+    db.set_start_date(con, pid, date(2026, 10, 3))
+    p = db.project(con, pid)
+    assert (p["start_date"], p["cure_start"]) == ("2026-10-03", "2026-10-03")
+    assert db.display_name(p) == "26/10/03 S"
+    assert db.events(con, pid)[-1]["kind"] == "start_date_changed"
+
+
+def test_start_date_cannot_pass_a_fixed_bag_date(env):
+    with pytest.raises(ValueError, match="after the bag date"):
+        db.set_start_date(env, 1, date(2026, 8, 20))               # demo bagged 15 Aug, day 0 locked
+    db.set_start_date(env, 1, date(2026, 8, 14))                   # earlier is fine
+    assert db.project(env, 1)["cure_start"] == "2026-08-15"        # locked bag date stays
+
+
+def test_bag_date_not_before_start_date(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "today", lambda: TODAY)
+    con = db.connect(tmp_path / "b.sqlite")
+    pid = db.create_project(con, "B", "Classic Italian", False, 1000, start_date=date(2026, 10, 5))
+    with pytest.raises(ValueError, match="before the start date"):
+        db.set_cure(con, pid, shape="flat", thickness_cm=4, start=date(2026, 10, 1))
+
+
+def test_start_date_changed_from_sidebar(env):
+    at = start()
+    next(d for d in at.date_input if d.key == "sd1").set_value(date(2026, 8, 14))
+    at.run()
+    next(b for b in at.button if b.label == "Change start date").click()
+    at.run()
+    assert not at.exception, at.exception
+    assert at.header[0].value == "26/08/14 Palermo Spicy"

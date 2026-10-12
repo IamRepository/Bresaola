@@ -305,6 +305,31 @@ def set_spice_note(con, pid: int, note: str | None) -> None:
     con.execute("UPDATE project SET spice_note=? WHERE id=?", (note or None, pid))
 
 
+def set_start_date(con, pid: int, day) -> None:
+    """Change day 0. The bag date can't be earlier than day 0; if the bag date was simply the old
+    day 0 and the cure isn't locked yet, it moves along."""
+    _require_open(con, pid)
+    p = project(con, pid)
+    new = date.fromisoformat(_iso(day))
+    old = p["start_date"]
+    if old == new.isoformat():
+        return
+    if p["cure_start"]:
+        bag = date.fromisoformat(p["cure_start"])
+        follows = p["cure_start"] == old and not p["spice_locked_at"] and not p["cure_locked_at"]
+        if follows:
+            if new > today():
+                raise ValueError("The start date is in the future")
+            planned = calc.cure_end_date(new, p["thickness_cm"], p["shape"]) if p["thickness_cm"] else None
+            con.execute("UPDATE project SET cure_start=?, cure_end_planned=? WHERE id=?",
+                        (new.isoformat(), planned.isoformat() if planned else None, pid))
+        elif new > bag:
+            raise ValueError(f"The start date can't be after the bag date ({bag:%d %b %Y}). "
+                             "Unlock day 0 to change the bag date too.")
+    con.execute("UPDATE project SET start_date=? WHERE id=?", (new.isoformat(), pid))
+    log(con, pid, "start_date_changed", f"{old} -> {new.isoformat()}")
+
+
 def display_name(p) -> str:
     """'26/08/15 Palermo Spicy' – start date as YY/MM/DD, then the name."""
     d = p["start_date"] or p["created_at"][:10]
@@ -336,6 +361,10 @@ def set_cure(con, pid: int, *, shape: str, thickness_cm: float, start, length_cm
     end_d = date.fromisoformat(_iso(end_actual)) if end_actual else None
     if start_d > today():
         raise ValueError("'Into the bag' is in the future")
+    day0 = project(con, pid)["start_date"]
+    if day0 and start_d.isoformat() < day0:
+        raise ValueError(f"'Into the bag' can't be before the start date ({date.fromisoformat(day0):%d %b %Y}). "
+                         "If the start date is wrong, change it in the project menu in the sidebar.")
     if end_d and end_d > today():
         raise ValueError("'Taken out of the bag' is in the future")
     if end_d and end_d < start_d:
