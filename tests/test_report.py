@@ -1,6 +1,6 @@
 """PDF summary."""
 import io
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -18,6 +18,7 @@ TODAY = date(2026, 10, 12)
 def con(tmp_path, monkeypatch):
     monkeypatch.setenv("BRESAOLA_DATA", str(tmp_path))
     monkeypatch.setattr(db, "today", lambda: TODAY)
+    monkeypatch.setattr(db, "now_local", lambda: datetime(2026, 10, 12, 12, 0, tzinfo=db.TZ))  # closing timestamp
     c = db.connect(storage.db_path())
     seed_demo(c)
     return c

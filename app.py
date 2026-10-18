@@ -17,7 +17,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from bresaola import __version__, calc, db, report, storage
+from bresaola import __version__, calc, db, report, sensors, storage, tapo_sync
 from bresaola.blends import BLENDS
 from bresaola.demo import seed_demo
 
@@ -853,6 +853,75 @@ def step_dry_start():
             act(start_drying, pid, success="Drying started")
 
 
+def chamber_section():
+    """Temperature/humidity of the drying chamber: chart, import from the Tapo app, hub sync."""
+    ch = con.execute("SELECT * FROM chamber WHERE id=?", (p["chamber_id"],)).fetchone()
+    cr = db.chamber_readings(con, ch["id"], p["dry_start"], p["dry_end"])
+    title = f"Chamber: {ch['name']}" + (f" ({len(cr)} readings)" if cr else " (no readings yet)")
+    with st.expander(title):
+        if cr:
+            temps = [c["temp_c"] for c in cr if c["temp_c"] is not None]
+            rhs = [c["rh_pct"] for c in cr if c["rh_pct"] is not None]
+            cdf = pd.DataFrame([{"Time": pd.Timestamp(c["ts"]), "t": c["temp_c"], "h": c["rh_pct"]} for c in cr])
+            c1, c2 = st.columns(2)
+            for col, field, title, colour in ((c1, "t", "Temperature [°C]", RED), (c2, "h", "Humidity [%]", GREEN)):
+                sub = cdf.dropna(subset=[field])
+                if len(sub):
+                    col.altair_chart(alt.Chart(sub).mark_line(color=colour, strokeWidth=1.2).encode(
+                        x=alt.X("Time:T", title=None),
+                        y=alt.Y(f"{field}:Q", title=title, scale=alt.Scale(zero=False)),
+                        tooltip=[alt.Tooltip("Time:T", format="%d %b %H:%M"), alt.Tooltip(f"{field}:Q", title=title)],
+                    ).properties(height=200), width="stretch")
+            bits = []
+            if temps:
+                bits.append(f"temperature {min(temps):.1f} to {max(temps):.1f} °C, average {sum(temps)/len(temps):.1f}")
+            if rhs:
+                bits.append(f"humidity {min(rhs):.0f} to {max(rhs):.0f} %, average {sum(rhs)/len(rhs):.0f}")
+            st.caption(f"Since drying started: {'; '.join(bits)}. Last reading {fmt_date(cr[-1]['ts'][:10])} "
+                       f"{cr[-1]['ts'][11:16]}.")
+        if closed:
+            return
+        st.markdown("**Import from the Tapo app**")
+        st.caption("In the Tapo app: sensor → History → View All → download icon → pick interval and range. "
+                   "Attach the file from the e-mail here. Importing the same period again replaces, never doubles.")
+        up = st.file_uploader("Tapo export", type=["csv", "xlsx"], key=f"tapo{pid}{st.session_state.get('tapo_n', 0)}",
+                              label_visibility="collapsed")
+        if up is not None:
+            try:
+                parsed = sensors.parse_export(up.getvalue(), up.name)
+            except ValueError as e:
+                st.error(str(e))
+                parsed = None
+            if parsed:
+                temps = [t for _, t, _ in parsed.rows if t is not None]
+                rhs = [h for _, _, h in parsed.rows if h is not None]
+                st.info(f"**{len(parsed.rows)} readings** from {parsed.first:%d %b %Y %H:%M} to "
+                        f"{parsed.last:%d %b %Y %H:%M}"
+                        + (f"; temperature {min(temps):.1f} to {max(temps):.1f} °C" if temps else "")
+                        + (" (converted from °F)" if parsed.fahrenheit else "")
+                        + (f"; humidity {min(rhs):.0f} to {max(rhs):.0f} %" if rhs else "")
+                        + (f". {parsed.skipped} lines skipped." if parsed.skipped else "."))
+                if st.button(f"Import into {ch['name']}", type="primary", key=f"tapoimp{pid}"):
+                    with con:
+                        stored, rejected = sensors.import_readings(con, ch["id"], parsed.rows, "tapo_export")
+                    st.session_state["tapo_n"] = st.session_state.get("tapo_n", 0) + 1      # empty the uploader
+                    st.session_state["flash"] = (f"{stored} readings imported into {ch['name']}"
+                                                 + (f", {rejected} out of range skipped" if rejected else ""))
+                    st.rerun()
+        if tapo_sync.is_configured():
+            st.markdown("**Straight from the hub**")
+            st.caption("The hub keeps the last 24 hours. A daily scheduled sync (see README) keeps the history complete.")
+            if st.button("Sync last 24 h from hub", key=f"tapohub{pid}"):
+                with st.spinner("Reading the hub..."):
+                    res = tapo_sync.sync(con)
+                errs = [f"{r.chamber}: {r.error}" for r in res if r.error]
+                if errs:
+                    st.session_state["flash_error"] = "Hub sync failed. " + "; ".join(errs)
+                else:
+                    st.session_state["flash"] = "; ".join(f"{r.chamber}: {r.stored} readings" for r in res)
+                st.rerun()
+
+
 def step_dry():
     if not p["dry_start"]:
         step_dry_start()
@@ -942,11 +1011,8 @@ def step_dry():
             "Lost [%]": round(calc.loss_pct(s["start_gross_g"], r["gross_g"], p["tare_g"]), 1),
             "Note": r["note"] or ""} for r in rows])
         st.dataframe(tdf, hide_index=True, width="stretch", height=300)
-    cr = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"]) if p["chamber_id"] else []
-    if cr:
-        with st.expander("Chamber temperature and humidity"):
-            cdf = pd.DataFrame([{"Time": pd.Timestamp(c["ts"]), "°C": c["temp_c"], "RH %": c["rh_pct"]} for c in cr])
-            st.line_chart(cdf.set_index("Time"), height=200)
+    if p["chamber_id"]:
+        chamber_section()
     if not d_locked and len(rows) > 1:
         with st.expander("Delete a weigh-in"):
             choice = st.selectbox("Weigh-in", [r["day"] for r in rows[1:]], format_func=fmt_date)

@@ -2,7 +2,7 @@
 
 Records home-cured bresaola batches from spice mix to slicing: calculated amounts, cure time, weigh-ins, chamber temperature/humidity and photos, then a PDF summary when the batch is closed.
 
-**Status: v0.3.8 — journey layout, PDF batch summary.**
+**Status: v0.3.9 — journey layout, PDF batch summary, Tapo sensor import.**
 
 ## Steps (journey rail at the top; a next-action card says what to do today)
 1. **Day 0: spice and bag** – meat weight, EcoCure on/off, blend → planned grams, actual amounts; measure the piece and seal the bag (cure time shown live). *Done* locks day 0 and starts the cure.
@@ -50,6 +50,28 @@ Deploy this repo with main file `app.py`. Data is wiped whenever the app restart
 python -m pytest
 python -m bresaola.seed_from_xlsx tests/fixtures/bresaola_v5.xlsx data/bresaola.sqlite   # import the original workbook
 ```
+
+## Chamber temperature and humidity (Tapo T310/T315)
+
+**Import from the Tapo app (works everywhere, including Streamlit Cloud).**
+In the Tapo app: sensor → History → View All → download icon → choose interval and range → Export.
+Open the e-mail, save the file, and upload it in **Dry → Chamber → Import from the Tapo app**.
+The app shows how many readings, which period and the ranges before importing. Importing an
+overlapping period again replaces those readings; it never doubles them.
+
+**Straight from the H100 hub (PC or NAS on your home network only).**
+The hub keeps only the last 24 hours (15-minute averages), so schedule a sync at least once a day.
+
+1. `pip install -r requirements-local.txt`
+2. Set these environment variables for the app and for the scheduled task:
+   - `TAPO_USERNAME` / `TAPO_PASSWORD`: your Tapo account
+   - `TAPO_HUB_IP`: the H100's address (Tapo app → hub → Device info), best fixed in your router
+   - `TAPO_SENSORS`: `Fridge drawer=<sensor nickname in the Tapo app>` (more pairs separated by `;`)
+3. Test it once: `python -m bresaola.tapo_sync`
+4. Schedule the same command daily (Windows Task Scheduler, or cron on the NAS, e.g. `15 6 * * *`).
+
+With the variables set, the Dry step also shows a **Sync last 24 h from hub** button.
+Credentials stay in the environment of your own machine; they are never stored in the database or the repo.
 
 ## Backlog
 - **Equalise step** – built (checks, lock, photos) but hidden. Not part of the current process (vacuum bag is used only for curing). Spec agreed 2026-10-09 for when it is switched on:
