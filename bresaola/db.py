@@ -209,6 +209,26 @@ def add_chamber_reading(con, chamber_id: int, ts, temp_c=None, rh_pct=None, sour
                    VALUES (?,?,?,?,?)""", (chamber_id, _iso(ts), temp_c, rh_pct, source))
 
 
+SOURCE_NAMES = {"tapo_export": "Tapo app import", "tapo_api": "hub sync", "manual": "entered with weigh-ins"}
+
+
+def chamber_reading_counts(con, chamber_id: int) -> dict[str, tuple[int, str, str]]:
+    """{source: (count, first ts, last ts)}"""
+    rows = con.execute("""SELECT source, COUNT(*) n, MIN(ts) a, MAX(ts) b FROM chamber_reading
+                          WHERE chamber_id=? GROUP BY source""", (chamber_id,)).fetchall()
+    return {r["source"]: (r["n"], r["a"], r["b"]) for r in rows}
+
+
+def delete_chamber_readings(con, chamber_id: int, source: str, start=None, end=None) -> int:
+    """Remove readings of one source (optionally only between start and end, inclusive). Returns the count."""
+    q, args = "DELETE FROM chamber_reading WHERE chamber_id=? AND source=?", [chamber_id, source]
+    if start:
+        q += " AND ts >= ?"; args.append(_iso(start))
+    if end:
+        q += " AND ts <= ?"; args.append(_iso(end))
+    return con.execute(q, args).rowcount
+
+
 # ----------------------------- project ------------------------------------- #
 
 def project(con, project_id: int) -> sqlite3.Row:

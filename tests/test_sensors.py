@@ -162,7 +162,7 @@ def test_dry_step_shows_chamber_section(con, monkeypatch):
     at = AppTest.from_file(APP, default_timeout=30)
     at.run()
     assert not at.exception, at.exception
-    assert any(e.label.startswith("Chamber: Fridge drawer") for e in at.expander)
+    assert any(e.label == "Chamber: Fridge drawer" for e in at.expander)
     assert any("Import from the Tapo app" in m.value for m in at.markdown)
     assert not any(b.label == "Sync last 24 h from hub" for b in at.button)       # not configured here
 
@@ -201,3 +201,51 @@ def test_leave_out_a_period():
     kept, n = sensors.leave_out(rows, datetime(2026, 10, 3, 12, 15), datetime(2026, 10, 9, 4, 0))
     assert n == 2 and [r[0].hour for r in kept] == [12, 4] and kept[1][0].minute == 15
     assert sensors.leave_out(rows, None, None) == (rows, 0)
+
+
+# ---- weigh-ins matched to chamber readings (noon rule) --------------------------------
+
+def _rows(*items):
+    return [{"ts": t, "temp_c": c, "rh_pct": h} for t, c, h in items]
+
+
+def test_weigh_in_takes_reading_nearest_noon():
+    cr = _rows(("2026-09-26T11:45:00", 2.1, 80), ("2026-09-26T12:15:00", 2.4, 82),
+               ("2026-09-26T11:55:00", 2.0, 79), ("2026-09-30T08:30:00", 1.5, 85))
+    m = sensors.match_weigh_ins([date(2026, 9, 26), date(2026, 9, 30), date(2026, 10, 4)], cr)
+    assert m[date(2026, 9, 26)][:2] == (2.0, 79)            # 11:55 is closest to 12:00
+    assert m[date(2026, 9, 30)] is None                     # 3.5 h away: sensor gap, don't guess
+    assert m[date(2026, 10, 4)] is None                     # no data at all
+
+
+def test_remove_readings_by_source_and_period(con):
+    with con:
+        sensors.import_readings(con, 1, [(datetime(2026, 10, d, 12), 2.0, 80.0) for d in (1, 2, 3)], "tapo_export")
+        db.add_chamber_reading(con, 1, "2026-10-02T12:00:00", 2.5, 81, source="manual")
+        assert db.delete_chamber_readings(con, 1, "tapo_export", datetime(2026, 10, 2), datetime(2026, 10, 2, 23, 59, 59)) == 1
+    assert db.chamber_reading_counts(con, 1)["tapo_export"][0] == 2
+    with con:
+        assert db.delete_chamber_readings(con, 1, "tapo_export") == 2
+    assert "tapo_export" not in db.chamber_reading_counts(con, 1)
+    assert db.chamber_reading_counts(con, 1)["manual"][0] == 1     # other sources untouched
+
+
+def test_weigh_in_table_and_pdf_show_chamber_values(con, monkeypatch):
+    with con:
+        sensors.import_readings(con, 1, [(datetime(2026, 9, 26, 12, 0), 2.7, 81.0),
+                                         (datetime(2026, 10, 8, 11, 45), 1.9, 79.0)], "tapo_export")
+    monkeypatch.setenv("BRESAOLA_MODE", "persistent")
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    assert not at.exception, at.exception
+    df = at.dataframe[0].value
+    assert list(df.columns)[4:6] == ["°C", "RH [%]"]
+    by_date = {r["Date"]: (r["°C"], r["RH [%]"]) for _, r in df.iterrows()}
+    assert by_date["26 Sep"] == ("2.7", "81") and by_date["08 Oct"] == ("1.9", "79")
+    assert by_date["30 Sep"] == ("–", "–")                          # no reading near noon
+    assert any("Dashed lines: weigh-ins" in c.value for c in at.caption)
+    assert any(b.label == "Remove readings" for b in at.button)
+    from pypdf import PdfReader
+    from bresaola import report
+    t = " ".join(pg.extract_text() for pg in PdfReader(io.BytesIO(report.build_pdf(con, 1))).pages)
+    assert "nearest 12:00" in t and "2.7" in t

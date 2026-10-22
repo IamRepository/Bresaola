@@ -15,7 +15,8 @@ import csv
 import io
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from bisect import bisect_left
+from datetime import date, datetime, time, timedelta
 
 from . import db
 
@@ -201,3 +202,29 @@ def import_readings(con, chamber_id: int, rows, source: str) -> tuple[int, int]:
         except ValueError:
             rejected += 1
     return stored, rejected
+
+
+WEIGH_IN_TIME = time(12, 0)          # weigh-ins have a date only; treat them as noon
+MATCH_WINDOW = timedelta(hours=3)    # the noon time is itself an assumption; beyond 3 h = no data
+
+
+def weigh_in_time(day: date) -> datetime:
+    return datetime.combine(day, WEIGH_IN_TIME)
+
+
+def match_weigh_ins(days: list[date], chamber_rows) -> dict[date, tuple[float | None, float | None, datetime] | None]:
+    """For each weigh-in day: (temp_c, rh_pct, reading time) of the chamber reading closest to noon,
+    or None when nothing was recorded within MATCH_WINDOW. chamber_rows: rows with ts, temp_c, rh_pct."""
+    pts = sorted((datetime.fromisoformat(r["ts"]), r["temp_c"], r["rh_pct"]) for r in chamber_rows)
+    times = [p[0] for p in pts]
+    out = {}
+    for d in days:
+        t = weigh_in_time(d)
+        i = bisect_left(times, t)
+        best = None
+        for j in (i - 1, i):
+            if 0 <= j < len(pts) and abs(pts[j][0] - t) <= MATCH_WINDOW:
+                if best is None or abs(pts[j][0] - t) < abs(best[0] - t):
+                    best = pts[j]
+        out[d] = (best[1], best[2], best[0]) if best else None
+    return out

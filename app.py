@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 import altair as alt
 import pandas as pd
@@ -805,8 +805,8 @@ def save_weigh_in(r: dict, confirmed: bool = False) -> None:
         with con:
             rid = db.add_reading(con, pid, r["day"], r["weight"], r["note"], confirmed=confirmed)
             if (r["temp"] is not None or r["rh"] is not None) and p["chamber_id"]:
-                db.add_chamber_reading(con, p["chamber_id"], datetime.combine(
-                    r["day"], db.now_local().time()).isoformat(timespec="minutes"), r["temp"], r["rh"])
+                db.add_chamber_reading(con, p["chamber_id"], sensors.weigh_in_time(r["day"]).isoformat(),
+                                       r["temp"], r["rh"])          # weigh-ins count as 12:00
             if r["photo"]:
                 rel = storage.save_photo(pid, *r["photo"])   # raises ValueError if unreadable
                 db.add_photo(con, pid, rel, r["day"], r["note"] or f"Weigh-in {r['weight']:.0f} g",
@@ -853,31 +853,65 @@ def step_dry_start():
             act(start_drying, pid, success="Drying started")
 
 
+def climate_cell(m, i: int) -> str:
+    if not m or m[i] is None:
+        return "–"
+    return f"{m[i]:.1f}" if i == 0 else f"{m[i]:.0f}"
+
+
+def weigh_in_climate() -> dict:
+    """{weigh-in day: (temp, rh, reading time) or None} from the drying chamber."""
+    if not p["chamber_id"]:
+        return {}
+    cr = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"])
+    return sensors.match_weigh_ins([d(r["day"]) for r in db.reading_rows(con, pid)], cr)
+
+
 def chamber_section():
     """Temperature/humidity of the drying chamber: chart, import from the Tapo app, hub sync."""
     ch = con.execute("SELECT * FROM chamber WHERE id=?", (p["chamber_id"],)).fetchone()
     cr = db.chamber_readings(con, ch["id"], p["dry_start"], p["dry_end"])
-    title = f"Chamber: {ch['name']}" + (f" ({len(cr)} readings)" if cr else " (no readings yet)")
-    with st.expander(title):
+    # fixed title: a title that changes (e.g. with the reading count) makes the section close on every rerun
+    with st.expander(f"Chamber: {ch['name']}", key=f"chamber_exp{pid}"):
+        if not cr:
+            st.caption("No readings yet for the drying period.")
         if cr:
             temps = [c["temp_c"] for c in cr if c["temp_c"] is not None]
             rhs = [c["rh_pct"] for c in cr if c["rh_pct"] is not None]
             cdf = pd.DataFrame([{"Time": pd.Timestamp(c["ts"]), "t": c["temp_c"], "h": c["rh_pct"]} for c in cr])
+            cdf = cdf.sort_values("Time")
+            # a new segment after every gap > 1 h, so the line doesn't bridge periods without data
+            cdf["seg"] = (cdf["Time"].diff() > pd.Timedelta(hours=1)).cumsum()
+            match = weigh_in_climate()
+            wdf = pd.DataFrame([{"Time": pd.Timestamp(sensors.weigh_in_time(d(r["day"]))),
+                                 "Weigh-in": f"{fmt_date(r['day'])}: {r['gross_g']:.0f} g",
+                                 "t": (match.get(d(r["day"])) or (None, None))[0],
+                                 "h": (match.get(d(r["day"])) or (None, None))[1]}
+                                for r in db.reading_rows(con, pid)])
             c1, c2 = st.columns(2)
             for col, field, title, colour in ((c1, "t", "Temperature [°C]", RED), (c2, "h", "Humidity [%]", GREEN)):
                 sub = cdf.dropna(subset=[field])
                 if len(sub):
-                    col.altair_chart(alt.Chart(sub).mark_line(color=colour, strokeWidth=1.2).encode(
+                    base = alt.Chart(sub).mark_line(color=colour, strokeWidth=1.2).encode(
                         x=alt.X("Time:T", title=None),
                         y=alt.Y(f"{field}:Q", title=title, scale=alt.Scale(zero=False)),
-                        tooltip=[alt.Tooltip("Time:T", format="%d %b %H:%M"), alt.Tooltip(f"{field}:Q", title=title)],
-                    ).properties(height=200), width="stretch")
+                        detail="seg:N",
+                        tooltip=[alt.Tooltip("Time:T", format="%d %b %H:%M"), alt.Tooltip(f"{field}:Q", title=title)])
+                    rules = alt.Chart(wdf).mark_rule(color=MUTED, strokeDash=[3, 3], strokeWidth=1).encode(
+                        x="Time:T", tooltip=["Weigh-in:N"])
+                    dots = alt.Chart(wdf.dropna(subset=[field])).mark_point(
+                        color=INK, filled=True, size=45).encode(
+                        x="Time:T", y=f"{field}:Q",
+                        tooltip=["Weigh-in:N", alt.Tooltip(f"{field}:Q", title=title, format=".1f")])
+                    col.altair_chart(alt.layer(base, rules, dots).properties(height=220), width="stretch")
+            st.caption("Dashed lines: weigh-ins (counted as 12:00). Dots: the chamber reading used for each "
+                       "weigh-in (nearest to 12:00, within 3 hours).")
             bits = []
             if temps:
                 bits.append(f"temperature {min(temps):.1f} to {max(temps):.1f} °C, average {sum(temps)/len(temps):.1f}")
             if rhs:
                 bits.append(f"humidity {min(rhs):.0f} to {max(rhs):.0f} %, average {sum(rhs)/len(rhs):.0f}")
-            st.caption(f"Since drying started: {'; '.join(bits)}. Last reading {fmt_date(cr[-1]['ts'][:10])} "
+            st.caption(f"{len(cr)} readings since drying started: {'; '.join(bits)}. Last reading {fmt_date(cr[-1]['ts'][:10])} "
                        f"{cr[-1]['ts'][11:16]}.")
         if closed:
             return
@@ -927,6 +961,25 @@ def chamber_section():
                     st.session_state["tapo_n"] = st.session_state.get("tapo_n", 0) + 1      # empty the uploader
                     st.session_state["flash"] = (f"{stored} readings imported into {ch['name']}"
                                                  + (f", {rejected} out of range skipped" if rejected else ""))
+                    st.rerun()
+        counts = db.chamber_reading_counts(con, ch["id"])
+        if counts:
+            with st.expander("Remove readings (e.g. imported the wrong file)"):
+                srcs = list(counts)
+                src = st.selectbox("Which readings", srcs, key=f"rm_src{pid}", format_func=lambda s_: (
+                    f"{db.SOURCE_NAMES.get(s_, s_)}: {counts[s_][0]} readings, "
+                    f"{fmt_date(counts[s_][1][:10])} to {fmt_date(counts[s_][2][:10])}"))
+                c1, c2 = st.columns(2)
+                rm_a = c1.date_input("Only from (optional)", value=None, format="DD/MM/YYYY", key=f"rm_a{pid}")
+                rm_b = c2.date_input("Only to (optional)", value=None, format="DD/MM/YYYY", key=f"rm_b{pid}")
+                sure = st.checkbox("Remove them. This applies to the whole chamber, so every project using "
+                                   f"{ch['name']} loses these readings.", key=f"rm_ok{pid}")
+                if st.button("Remove readings", disabled=not sure, key=f"rm_b_{pid}"):
+                    with con:
+                        n = db.delete_chamber_readings(con, ch["id"], src,
+                                                       datetime.combine(rm_a, time.min) if rm_a else None,
+                                                       datetime.combine(rm_b, time(23, 59, 59)) if rm_b else None)
+                    st.session_state["flash"] = f"Removed {n} readings from {ch['name']}. Import the right file now."
                     st.rerun()
         if tapo_sync.is_configured():
             st.markdown("**Straight from the hub**")
@@ -1025,12 +1078,18 @@ def step_dry():
     left, right = st.columns([3, 2])
     left.altair_chart(alt.layer(line, target).properties(height=300), width="stretch")
     with right:
+        match = weigh_in_climate()
         tdf = pd.DataFrame([{
             "Date": d(r["day"]).strftime("%d %b"), "Day": (d(r["day"]) - d(p["dry_start"])).days,
             "Weight [g]": int(r["gross_g"]),
             "Lost [%]": round(calc.loss_pct(s["start_gross_g"], r["gross_g"], p["tare_g"]), 1),
+            "°C": climate_cell(match.get(d(r["day"])), 0),
+            "RH [%]": climate_cell(match.get(d(r["day"])), 1),
             "Note": r["note"] or ""} for r in rows])
-        st.dataframe(tdf, hide_index=True, width="stretch", height=300)
+        st.dataframe(tdf, hide_index=True, width="stretch", height=300, column_config={
+            "°C": st.column_config.TextColumn(help="Chamber reading nearest 12:00 on the weigh-in day, within "
+                                              "3 hours. – means the sensor had no data then."),
+            "RH [%]": st.column_config.TextColumn()})
     if p["chamber_id"]:
         chamber_section()
     if not d_locked and len(rows) > 1:
