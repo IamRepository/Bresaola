@@ -893,10 +893,20 @@ def chamber_section():
         if cr:
             temps = [c["temp_c"] for c in cr if c["temp_c"] is not None]
             rhs = [c["rh_pct"] for c in cr if c["rh_pct"] is not None]
-            cdf = pd.DataFrame([{"Time": pd.Timestamp(c["ts"]), "t": c["temp_c"], "h": c["rh_pct"]} for c in cr])
-            cdf = cdf.sort_values("Time")
-            # a new segment after every gap > 1 h, so the line doesn't bridge periods without data
-            cdf["seg"] = (cdf["Time"].diff() > pd.Timedelta(hours=1)).cumsum()
+            VIEWS = {"15 min": 0, "1 hour": 1, "12 hours": 12, "24 hours": 24}
+            view = st.segmented_control("Average per", list(VIEWS), default="1 hour", key=f"chview{pid}") or "1 hour"
+            hrs = VIEWS[view]
+            if hrs == 0:                     # every reading as recorded
+                cdf = pd.DataFrame([{"Time": pd.Timestamp(c["ts"]), "t": c["temp_c"], "h": c["rh_pct"]} for c in cr])
+                cdf = cdf.sort_values("Time")
+                gap = pd.Timedelta(hours=1)
+            else:                            # block averages, plotted mid-block (24 h: at 12:00, like the weigh-ins)
+                cdf = pd.DataFrame([{"Time": pd.Timestamp(b["mid"]), "t": b["t"], "t_min": b["t_min"],
+                                     "t_max": b["t_max"], "h": b["h"], "h_min": b["h_min"], "h_max": b["h_max"],
+                                     "n": b["n"]} for b in sensors.aggregate(cr, hrs)])
+                gap = pd.Timedelta(hours=hrs * 1.5)
+            # a new segment after every gap, so lines don't bridge periods without data
+            cdf["seg"] = (cdf["Time"].diff() > gap).cumsum()
             match = weigh_in_climate()
             wdf = pd.DataFrame([{"Time": pd.Timestamp(sensors.weigh_in_time(d(r["day"]))),
                                  "Weigh-in": f"{fmt_date(r['day'])}: {r['gross_g']:.0f} g",
@@ -906,21 +916,36 @@ def chamber_section():
             c1, c2 = st.columns(2)
             for col, field, title, colour in ((c1, "t", "Temperature [°C]", RED), (c2, "h", "Humidity [%]", GREEN)):
                 sub = cdf.dropna(subset=[field])
-                if len(sub):
-                    base = alt.Chart(sub).mark_line(color=colour, strokeWidth=1.2).encode(
-                        x=alt.X("Time:T", title=None),
-                        y=alt.Y(f"{field}:Q", title=title, scale=alt.Scale(zero=False)),
-                        detail="seg:N",
-                        tooltip=[alt.Tooltip("Time:T", format="%d %b %H:%M"), alt.Tooltip(f"{field}:Q", title=title)])
-                    rules = alt.Chart(wdf).mark_rule(color=MUTED, strokeDash=[3, 3], strokeWidth=1).encode(
-                        x="Time:T", tooltip=["Weigh-in:N"])
-                    dots = alt.Chart(wdf.dropna(subset=[field])).mark_point(
-                        color=INK, filled=True, size=45).encode(
-                        x="Time:T", y=f"{field}:Q",
-                        tooltip=["Weigh-in:N", alt.Tooltip(f"{field}:Q", title=title, format=".1f")])
-                    col.altair_chart(alt.layer(base, rules, dots).properties(height=220), width="stretch")
-            st.caption("Dashed lines: weigh-ins (shown at 12:00). Dots: that day's average temperature and "
-                       "humidity, the values in the weigh-in table.")
+                if not len(sub):
+                    continue
+                fmt = ".1f" if field == "t" else ".0f"
+                tip = [alt.Tooltip("Time:T", format="%d %b %H:%M" if hrs < 24 else "%d %b"),
+                       alt.Tooltip(f"{field}:Q", title=("average" if hrs else title), format=fmt)]
+                if hrs:
+                    tip += [alt.Tooltip(f"{field}_min:Q", title="lowest", format=fmt),
+                            alt.Tooltip(f"{field}_max:Q", title="highest", format=fmt),
+                            alt.Tooltip("n:Q", title="readings")]
+                layers = []
+                if hrs:                      # lowest–highest band behind the average
+                    layers.append(alt.Chart(sub).mark_area(color=colour, opacity=0.15).encode(
+                        x="Time:T", y=f"{field}_min:Q", y2=f"{field}_max:Q", detail="seg:N"))
+                layers.append(alt.Chart(sub).mark_line(
+                    color=colour, strokeWidth=1.6 if hrs else 1.2,
+                    point=alt.OverlayMarkDef(color=colour, size=22) if hrs >= 12 else False).encode(
+                    x=alt.X("Time:T", title=None),
+                    y=alt.Y(f"{field}:Q", title=title, scale=alt.Scale(zero=False)),
+                    detail="seg:N", tooltip=tip))
+                layers.append(alt.Chart(wdf).mark_rule(color=MUTED, strokeDash=[3, 3], strokeWidth=1).encode(
+                    x="Time:T", tooltip=["Weigh-in:N"]))
+                layers.append(alt.Chart(wdf.dropna(subset=[field])).mark_point(
+                    color=INK, filled=True, size=45).encode(
+                    x="Time:T", y=f"{field}:Q",
+                    tooltip=["Weigh-in:N", alt.Tooltip(f"{field}:Q", title="day average", format=fmt)]))
+                col.altair_chart(alt.layer(*layers).properties(height=220), width="stretch")
+            st.caption(("Line: average per " + view + "; shaded: lowest to highest in that period. " if hrs else
+                        "Every reading as recorded. ")
+                       + "Dashed lines: weigh-ins (shown at 12:00). Dots: that day's average, the values in the "
+                         "weigh-in table.")
             bits = []
             if temps:
                 bits.append(f"temperature {min(temps):.1f} to {max(temps):.1f} °C, average {sum(temps)/len(temps):.1f}")

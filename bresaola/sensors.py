@@ -260,3 +260,27 @@ def period_averages(days: list[date], chamber_rows) -> dict[date, tuple[float | 
                     round(sum(rhs) / len(rhs), 0) if rhs else None,
                     len(v), covered < PERIOD_MIN_COVERAGE, round(min(covered, 1.0), 2))
     return out
+
+
+def aggregate(chamber_rows, hours: int) -> list[dict]:
+    """Average chamber readings per block of `hours` (1, 12 or 24), blocks aligned to midnight.
+    Each block: mid (time plotted), avg/min/max for temperature and humidity, n readings.
+    Blocks without readings are left out, so charts can show the gap."""
+    blocks: dict[datetime, list] = {}
+    for r in chamber_rows:
+        t = datetime.fromisoformat(r["ts"])
+        start = datetime.combine(t.date(), time(t.hour - t.hour % hours))
+        blocks.setdefault(start, []).append((r["temp_c"], r["rh_pct"]))
+    out = []
+    for start in sorted(blocks):
+        v = blocks[start]
+        temps = [x[0] for x in v if x[0] is not None]
+        rhs = [x[1] for x in v if x[1] is not None]
+        out.append({
+            "start": start, "mid": start + timedelta(hours=hours) / 2, "n": len(v),
+            "t": round(sum(temps) / len(temps), 2) if temps else None,
+            "t_min": min(temps) if temps else None, "t_max": max(temps) if temps else None,
+            "h": round(sum(rhs) / len(rhs), 1) if rhs else None,
+            "h_min": min(rhs) if rhs else None, "h_max": max(rhs) if rhs else None,
+        })
+    return out

@@ -264,3 +264,30 @@ def test_period_average_since_previous_weigh_in():
     assert m[date(2026, 9, 30)] == (2.1, 80.0, 96, False, 1.0)
     assert m[date(2026, 10, 4)] == (9.0, 99.0, 1, True, 0.01)          # 1 of 96 hours covered
     assert date(2026, 9, 26) not in m                                 # first weigh-in: no period
+
+
+def test_aggregate_per_hour_12h_and_day():
+    cr = _rows(("2026-10-10T00:00:00", 1.0, 80), ("2026-10-10T00:45:00", 2.0, 82), ("2026-10-10T11:15:00", 3.0, 84),
+               ("2026-10-10T13:00:00", 4.0, 86), ("2026-10-12T09:00:00", 2.0, 80))
+    h1 = sensors.aggregate(cr, 1)
+    assert [b["start"].hour for b in h1[:3]] == [0, 11, 13] and h1[0]["t"] == 1.5 and h1[0]["n"] == 2
+    h12 = sensors.aggregate(cr, 12)
+    assert [(b["mid"], b["t"], b["t_min"], b["t_max"]) for b in h12[:2]] == [
+        (datetime(2026, 10, 10, 6), 2.0, 1.0, 3.0), (datetime(2026, 10, 10, 18), 4.0, 4.0, 4.0)]
+    d24 = sensors.aggregate(cr, 24)
+    assert [b["mid"] for b in d24] == [datetime(2026, 10, 10, 12), datetime(2026, 10, 12, 12)]   # gap day left out
+    assert d24[0]["t"] == 2.5 and d24[0]["h"] == 83.0 and d24[0]["n"] == 4
+
+
+def test_chamber_view_switch(con, monkeypatch):
+    with con:
+        sensors.import_readings(con, 1, [(datetime(2026, 9, 26, h), 2.0 + h / 10, 80.0) for h in range(24)], "tapo_export")
+    monkeypatch.setenv("BRESAOLA_MODE", "persistent")
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    for view in ("15 min", "12 hours", "24 hours", "1 hour"):
+        next(s for s in at.button_group if s.key == "chview1").set_value(view)
+        at.run()
+        assert not at.exception, (view, at.exception)
+        assert any(("average per " + view) in c.value or (view == "15 min" and "as recorded" in c.value)
+                   for c in at.caption), view

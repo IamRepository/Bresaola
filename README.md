@@ -2,7 +2,7 @@
 
 Records home-cured bresaola batches from spice mix to slicing: calculated amounts, cure time, weigh-ins, chamber temperature/humidity and photos, then a PDF summary when the batch is closed.
 
-**Status: v0.3.12 — journey layout, PDF batch summary, Tapo sensor import.**
+**Status: v0.3.13 — journey layout, PDF batch summary, Tapo sensor import.**
 
 ## Steps (journey rail at the top; a next-action card says what to do today)
 1. **Day 0: spice and bag** – meat weight, EcoCure on/off, blend → planned grams, actual amounts; measure the piece and seal the bag (cure time shown live). *Done* locks day 0 and starts the cure.
@@ -75,6 +75,8 @@ and humidity (all readings on that date; * = sensor reported for less than half 
 weigh-in table, on the charts (dashed line at 12:00 + dot) and in the PDF.
 Each weigh-in after the first also shows the average since the previous weigh-in (12:00 to 12:00), the
 conditions behind that weight loss, with *Data [%]*: the share of those hours with sensor readings.
+The chamber charts can show every reading (15 min) or averages per 1, 12 or 24 hours (default 1 hour), with
+a shaded band from the lowest to the highest reading in each period.
 **Wrong file imported?** Dry → Chamber → *Remove readings*: pick the import, optionally a date range, confirm.
 
 With the variables set, the Dry step also shows a **Sync last 24 h from hub** button.
