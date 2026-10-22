@@ -233,3 +233,30 @@ def day_averages(days: list[date], chamber_rows) -> dict[date, tuple[float | Non
                   round(sum(rhs) / len(rhs), 0) if rhs else None,
                   len(v), hours < FULL_DAY_HOURS)
     return out
+
+
+PERIOD_MIN_COVERAGE = 0.5            # below this share of hours with data, a period average is marked partial
+
+
+def period_averages(days: list[date], chamber_rows) -> dict[date, tuple[float | None, float | None, int, bool, float] | None]:
+    """For each weigh-in after the first: average °C and RH over the period since the previous weigh-in
+    (12:00 previous day to 12:00 this day), with (readings, partial, coverage share of hours with data).
+    None when the sensor recorded nothing in the period; the first weigh-in has no period and is left out."""
+    pts = sorted((datetime.fromisoformat(r["ts"]), r["temp_c"], r["rh_pct"]) for r in chamber_rows)
+    times = [p[0] for p in pts]
+    days = sorted(days)
+    out = {}
+    for prev, cur in zip(days, days[1:]):
+        a, b = weigh_in_time(prev), weigh_in_time(cur)
+        v = pts[bisect_left(times, a):bisect_left(times, b)]        # from a (inclusive) to b (exclusive)
+        if not v:
+            out[cur] = None
+            continue
+        temps = [x[1] for x in v if x[1] is not None]
+        rhs = [x[2] for x in v if x[2] is not None]
+        hours_total = max((b - a).total_seconds() / 3600, 1)
+        covered = len({(x[0].date(), x[0].hour) for x in v}) / hours_total
+        out[cur] = (round(sum(temps) / len(temps), 1) if temps else None,
+                    round(sum(rhs) / len(rhs), 0) if rhs else None,
+                    len(v), covered < PERIOD_MIN_COVERAGE, round(min(covered, 1.0), 2))
+    return out

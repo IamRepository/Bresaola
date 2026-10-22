@@ -860,6 +860,20 @@ def climate_cell(m, i: int) -> str:
     return (f"{m[i]:.1f}" if i == 0 else f"{m[i]:.0f}") + ("*" if m[3] else "")
 
 
+def period_cell(m, i: int) -> str:
+    if not m or m[i] is None:
+        return "–"
+    return (f"{m[i]:.1f}" if i == 0 else f"{m[i]:.0f}") + ("*" if m[3] else "")
+
+
+def weigh_in_periods() -> dict:
+    """{weigh-in day: (avg temp, avg rh, readings, partial, coverage) since the previous weigh-in}."""
+    if not p["chamber_id"]:
+        return {}
+    cr = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"])
+    return sensors.period_averages([d(r["day"]) for r in db.reading_rows(con, pid)], cr)
+
+
 def weigh_in_climate() -> dict:
     """{weigh-in day: (avg temp, avg rh, readings, partial) or None} from the drying chamber."""
     if not p["chamber_id"]:
@@ -1076,24 +1090,31 @@ def step_dry():
         tooltip=[alt.Tooltip("Date:T", format="%d %b %Y"), "Weight (g):Q"])
     target = alt.Chart(pd.DataFrame({"t": [s["target_gross_g"]]})).mark_rule(
         strokeDash=[6, 4], color=INK).encode(y=alt.Y("t:Q", title="Weight incl. wrap + net [g]"))
-    left, right = st.columns([3, 2])
-    left.altair_chart(alt.layer(line, target).properties(height=300), width="stretch")
-    with right:
-        match = weigh_in_climate()
-        tdf = pd.DataFrame([{
-            "Date": d(r["day"]).strftime("%d %b"), "Day": (d(r["day"]) - d(p["dry_start"])).days,
-            "Weight [g]": int(r["gross_g"]),
-            "Lost [%]": round(calc.loss_pct(s["start_gross_g"], r["gross_g"], p["tare_g"]), 1),
-            "°C": climate_cell(match.get(d(r["day"])), 0),
-            "RH [%]": climate_cell(match.get(d(r["day"])), 1),
-            "Note": r["note"] or ""} for r in rows])
-        st.dataframe(tdf, hide_index=True, width="stretch", height=300, column_config={
-            "°C": st.column_config.TextColumn(help="Average of all chamber readings on the weigh-in day. "
-                                              "* = the sensor reported for less than half the day. "
-                                              "– = no readings that day."),
-            "RH [%]": st.column_config.TextColumn(help="Day average, as for °C.")})
-        if any(m and m[3] for m in match.values()):
-            st.caption("°C and RH: day averages. * partial day (sensor reported for less than half the day).")
+    # chart full width, then the weigh-in table full width (it has 10 columns)
+    st.altair_chart(alt.layer(line, target).properties(height=280), width="stretch")
+    match = weigh_in_climate()
+    per = weigh_in_periods()
+    tdf = pd.DataFrame([{
+        "Date": d(r["day"]).strftime("%d %b"), "Day": (d(r["day"]) - d(p["dry_start"])).days,
+        "Weight [g]": int(r["gross_g"]),
+        "Lost [%]": round(calc.loss_pct(s["start_gross_g"], r["gross_g"], p["tare_g"]), 1),
+        "Day °C": climate_cell(match.get(d(r["day"])), 0),
+        "Day RH [%]": climate_cell(match.get(d(r["day"])), 1),
+        "Since last °C": period_cell(per.get(d(r["day"])), 0),
+        "Since last RH [%]": period_cell(per.get(d(r["day"])), 1),
+        "Data [%]": f"{per[d(r['day'])][4] * 100:.0f}" if per.get(d(r["day"])) else "–",
+        "Note": r["note"] or ""} for r in rows])
+    st.dataframe(tdf, hide_index=True, width="stretch", height=min(38 + 35 * len(tdf), 420), column_config={
+        "Day °C": st.column_config.TextColumn(help="Average of all chamber readings on the weigh-in day. "
+                                              "* = the sensor reported for less than half the day."),
+        "Day RH [%]": st.column_config.TextColumn(help="Day average, as for Day °C."),
+        "Since last °C": st.column_config.TextColumn(help="Average since the previous weigh-in (12:00 to "
+                                                     "12:00): the conditions behind this weight loss."),
+        "Since last RH [%]": st.column_config.TextColumn(help="Average since the previous weigh-in."),
+        "Data [%]": st.column_config.TextColumn(help="Share of hours since the previous weigh-in with "
+                                                "sensor readings. Under 50 % the averages get a *.")})
+    st.caption("Day: average on the weigh-in day. Since last: average since the previous weigh-in, the "
+           "conditions behind that weight loss. * less than half the time covered by sensor data; – none.")
     if p["chamber_id"]:
         chamber_section()
     if not d_locked and len(rows) > 1:

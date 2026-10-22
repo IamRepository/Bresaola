@@ -282,20 +282,28 @@ def build_pdf(con, pid: int) -> bytes:
         story.append(KeepTogether(head))
         crs = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"]) if p["chamber_id"] else []
         match = sensors.day_averages([_d(r["day"]) for r in rrows], crs)
-        wr = [["Date", "Day", "Weight", "Lost", "°C", "RH", "Note"]]
+        per = sensors.period_averages([_d(r["day"]) for r in rrows], crs)
+
+        def cell(m, i, unit=""):
+            if not m or m[i] is None:
+                return "–"
+            return (f"{m[i]:.1f}" if i == 0 else f"{m[i]:.0f}") + unit + ("*" if m[3] else "")
+        wr = [["Date", "Day", "Weight", "Lost", "Day °C", "Day RH", "Since °C", "Since RH", "Data", "Note"]]
         for r in rrows:
             day = _d(r["day"])
-            m = match.get(day)
+            m, q = match.get(day), per.get(day)
             wr.append([_fd(day), str((day - _d(p["dry_start"])).days), f"{r['gross_g']:.0f} g",
                        f"{calc.loss_pct(p['dry_start_gross_g'], r['gross_g'], tare):.1f} %",
-                       (f"{m[0]:.1f}" + ("*" if m[3] else "")) if m and m[0] is not None else "–",
-                       (f"{m[1]:.0f} %" + ("*" if m[3] else "")) if m and m[1] is not None else "–",
-                       r["note"] or ""])
-        story.append(_table(_right(wr, (1, 2, 3, 4, 5)),
-                            [28 * mm, 12 * mm, 20 * mm, 16 * mm, 14 * mm, 14 * mm, BODY_W - 104 * mm]))
+                       cell(m, 0), cell(m, 1, " %"), cell(q, 0), cell(q, 1, " %"),
+                       f"{q[4] * 100:.0f} %" if q else "–", r["note"] or ""])
+        story.append(_table(_right(wr, (1, 2, 3, 4, 5, 6, 7, 8)),
+                            [22 * mm, 10 * mm, 17 * mm, 14 * mm, 14 * mm, 14 * mm, 15 * mm, 15 * mm, 12 * mm,
+                             BODY_W - 133 * mm]))
         if crs:
-            story.append(Paragraph("°C and RH: average of all chamber readings on the weigh-in day; * partial day "
-                                   "(sensor reported for less than half the day); – no readings that day.", S["small"]))
+            story.append(Paragraph("Day: average of all chamber readings on the weigh-in day. Since: average since "
+                                   "the previous weigh-in (12:00 to 12:00), the conditions behind that weight loss; "
+                                   "Data = share of those hours with sensor readings. * less than half the time "
+                                   "covered; – no readings.", S["small"]))
         if p["chamber_id"]:
             cr = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"] or today.isoformat())
             temps = [r["temp_c"] for r in cr if r["temp_c"] is not None]

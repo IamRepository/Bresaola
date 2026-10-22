@@ -1,6 +1,6 @@
 """Tapo T31x readings: app export files and the H100 hub sync."""
 import io
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -240,8 +240,12 @@ def test_weigh_in_table_and_pdf_show_chamber_values(con, monkeypatch):
     at.run()
     assert not at.exception, at.exception
     df = at.dataframe[0].value
-    assert list(df.columns)[4:6] == ["°C", "RH [%]"]
-    by_date = {r["Date"]: (r["°C"], r["RH [%]"]) for _, r in df.iterrows()}
+    assert list(df.columns)[4:9] == ["Day °C", "Day RH [%]", "Since last °C", "Since last RH [%]", "Data [%]"]
+    by_date = {r["Date"]: (r["Day °C"], r["Day RH [%]"]) for _, r in df.iterrows()}
+    since = {r["Date"]: (r["Since last °C"], r["Since last RH [%]"], r["Data [%]"]) for _, r in df.iterrows()}
+    assert since["20 Sep"] == ("–", "–", "–")                         # first weigh-in has no period
+    assert since["26 Sep"] == ("–", "–", "–")                         # a 12:00 reading starts the next period
+    assert since["30 Sep"] == ("2.7*", "81*", "1")                    # one reading in 4 days
     assert by_date["26 Sep"] == ("2.7*", "81*") and by_date["08 Oct"] == ("1.9*", "79*")   # 1 reading = partial
     assert by_date["30 Sep"] == ("–", "–")                          # no reading near noon
     assert any("Dashed lines: weigh-ins" in c.value for c in at.caption)
@@ -249,4 +253,14 @@ def test_weigh_in_table_and_pdf_show_chamber_values(con, monkeypatch):
     from pypdf import PdfReader
     from bresaola import report
     t = " ".join(pg.extract_text() for pg in PdfReader(io.BytesIO(report.build_pdf(con, 1))).pages)
-    assert "average of all chamber readings" in t and "2.7*" in t
+    assert "average of all chamber readings" in t and "previous weigh-in" in t and "2.7*" in t
+
+
+def test_period_average_since_previous_weigh_in():
+    # every hour from 26 Sep 12:00 to 30 Sep 11:00 → full coverage; a reading after 30 Sep noon belongs to the next period
+    cr = _rows(*[((datetime(2026, 9, 26, 12) + timedelta(hours=h)).isoformat(), 2.0 + (h % 2) * 0.2, 80)
+                 for h in range(96)], ("2026-09-30T12:00:00", 9.0, 99))
+    m = sensors.period_averages([date(2026, 9, 30), date(2026, 9, 26), date(2026, 10, 4)], cr)   # any order
+    assert m[date(2026, 9, 30)] == (2.1, 80.0, 96, False, 1.0)
+    assert m[date(2026, 10, 4)] == (9.0, 99.0, 1, True, 0.01)          # 1 of 96 hours covered
+    assert date(2026, 9, 26) not in m                                 # first weigh-in: no period
