@@ -209,13 +209,14 @@ def _rows(*items):
     return [{"ts": t, "temp_c": c, "rh_pct": h} for t, c, h in items]
 
 
-def test_weigh_in_takes_reading_nearest_noon():
-    cr = _rows(("2026-09-26T11:45:00", 2.1, 80), ("2026-09-26T12:15:00", 2.4, 82),
-               ("2026-09-26T11:55:00", 2.0, 79), ("2026-09-30T08:30:00", 1.5, 85))
-    m = sensors.match_weigh_ins([date(2026, 9, 26), date(2026, 9, 30), date(2026, 10, 4)], cr)
-    assert m[date(2026, 9, 26)][:2] == (2.0, 79)            # 11:55 is closest to 12:00
-    assert m[date(2026, 9, 30)] is None                     # 3.5 h away: sensor gap, don't guess
-    assert m[date(2026, 10, 4)] is None                     # no data at all
+def test_weigh_in_gets_the_day_average():
+    full = [(f"2026-09-26T{h:02d}:00:00", 2.0 + (h % 2) * 0.4, 80 + (h % 2) * 2) for h in range(24)]   # 24 h
+    cr = _rows(*full, ("2026-09-20T16:30:00", 1.3, 63), ("2026-09-20T17:30:00", 3.1, 74),
+               ("2026-09-25T23:45:00", 9.9, 99))                                  # previous day: not used
+    m = sensors.day_averages([date(2026, 9, 26), date(2026, 9, 20), date(2026, 10, 4)], cr)
+    assert m[date(2026, 9, 26)] == (2.2, 81.0, 24, False)        # whole day: not partial
+    assert m[date(2026, 9, 20)] == (2.2, 68.0, 2, True)          # sensor started 16:30: partial
+    assert m[date(2026, 10, 4)] is None                         # no readings that day
 
 
 def test_remove_readings_by_source_and_period(con):
@@ -241,11 +242,11 @@ def test_weigh_in_table_and_pdf_show_chamber_values(con, monkeypatch):
     df = at.dataframe[0].value
     assert list(df.columns)[4:6] == ["°C", "RH [%]"]
     by_date = {r["Date"]: (r["°C"], r["RH [%]"]) for _, r in df.iterrows()}
-    assert by_date["26 Sep"] == ("2.7", "81") and by_date["08 Oct"] == ("1.9", "79")
+    assert by_date["26 Sep"] == ("2.7*", "81*") and by_date["08 Oct"] == ("1.9*", "79*")   # 1 reading = partial
     assert by_date["30 Sep"] == ("–", "–")                          # no reading near noon
     assert any("Dashed lines: weigh-ins" in c.value for c in at.caption)
     assert any(b.label == "Remove readings" for b in at.button)
     from pypdf import PdfReader
     from bresaola import report
     t = " ".join(pg.extract_text() for pg in PdfReader(io.BytesIO(report.build_pdf(con, 1))).pages)
-    assert "nearest 12:00" in t and "2.7" in t
+    assert "average of all chamber readings" in t and "2.7*" in t

@@ -2,7 +2,7 @@
 
 Records home-cured bresaola batches from spice mix to slicing: calculated amounts, cure time, weigh-ins, chamber temperature/humidity and photos, then a PDF summary when the batch is closed.
 
-**Status: v0.3.10 — journey layout, PDF batch summary, Tapo sensor import.**
+**Status: v0.3.11 — journey layout, PDF batch summary, Tapo sensor import.**
 
 ## Steps (journey rail at the top; a next-action card says what to do today)
 1. **Day 0: spice and bag** – meat weight, EcoCure on/off, blend → planned grams, actual amounts; measure the piece and seal the bag (cure time shown live). *Done* locks day 0 and starts the cure.
@@ -70,9 +70,9 @@ The hub keeps only the last 24 hours (15-minute averages), so schedule a sync at
 3. Test it once: `python -m bresaola.tapo_sync`
 4. Schedule the same command daily (Windows Task Scheduler, or cron on the NAS, e.g. `15 6 * * *`).
 
-**Weigh-ins and the chamber.** Weigh-ins have a date only and count as 12:00. Each weigh-in shows the
-chamber reading nearest to 12:00 that day (within 3 hours; – if the sensor had no data), in the weigh-in
-table, on the temperature and humidity charts (dashed line + dot) and in the PDF.
+**Weigh-ins and the chamber.** Each weigh-in shows that day's average chamber temperature
+and humidity (all readings on that date; * = sensor reported for less than half the day; – = none), in the
+weigh-in table, on the charts (dashed line at 12:00 + dot) and in the PDF.
 **Wrong file imported?** Dry → Chamber → *Remove readings*: pick the import, optionally a date range, confirm.
 
 With the variables set, the Dry step also shows a **Sync last 24 h from hub** button.

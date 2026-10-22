@@ -204,27 +204,32 @@ def import_readings(con, chamber_id: int, rows, source: str) -> tuple[int, int]:
     return stored, rejected
 
 
-WEIGH_IN_TIME = time(12, 0)          # weigh-ins have a date only; treat them as noon
-MATCH_WINDOW = timedelta(hours=3)    # the noon time is itself an assumption; beyond 3 h = no data
+WEIGH_IN_TIME = time(12, 0)          # weigh-ins have a date only; shown at noon on the charts
+FULL_DAY_HOURS = 12                  # a day average from fewer clock hours than this is marked partial
 
 
 def weigh_in_time(day: date) -> datetime:
     return datetime.combine(day, WEIGH_IN_TIME)
 
 
-def match_weigh_ins(days: list[date], chamber_rows) -> dict[date, tuple[float | None, float | None, datetime] | None]:
-    """For each weigh-in day: (temp_c, rh_pct, reading time) of the chamber reading closest to noon,
-    or None when nothing was recorded within MATCH_WINDOW. chamber_rows: rows with ts, temp_c, rh_pct."""
-    pts = sorted((datetime.fromisoformat(r["ts"]), r["temp_c"], r["rh_pct"]) for r in chamber_rows)
-    times = [p[0] for p in pts]
+def day_averages(days: list[date], chamber_rows) -> dict[date, tuple[float | None, float | None, int, bool] | None]:
+    """For each weigh-in day: (average °C, average RH, number of readings, partial day) over all chamber
+    readings on that calendar day, or None when the sensor recorded nothing that day.
+    'partial' = readings cover fewer than FULL_DAY_HOURS different clock hours (sensor started late, gaps)."""
+    by_day: dict[date, list] = {}
+    for r in chamber_rows:
+        t = datetime.fromisoformat(r["ts"])
+        by_day.setdefault(t.date(), []).append((t, r["temp_c"], r["rh_pct"]))
     out = {}
     for d in days:
-        t = weigh_in_time(d)
-        i = bisect_left(times, t)
-        best = None
-        for j in (i - 1, i):
-            if 0 <= j < len(pts) and abs(pts[j][0] - t) <= MATCH_WINDOW:
-                if best is None or abs(pts[j][0] - t) < abs(best[0] - t):
-                    best = pts[j]
-        out[d] = (best[1], best[2], best[0]) if best else None
+        v = by_day.get(d)
+        if not v:
+            out[d] = None
+            continue
+        temps = [x[1] for x in v if x[1] is not None]
+        rhs = [x[2] for x in v if x[2] is not None]
+        hours = len({x[0].hour for x in v})
+        out[d] = (round(sum(temps) / len(temps), 1) if temps else None,
+                  round(sum(rhs) / len(rhs), 0) if rhs else None,
+                  len(v), hours < FULL_DAY_HOURS)
     return out

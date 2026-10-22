@@ -281,20 +281,21 @@ def build_pdf(con, pid: int) -> bytes:
         head += [Spacer(1, 4), _chart(rs, _d(p["dry_start"]), s["target_gross_g"])]
         story.append(KeepTogether(head))
         crs = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"]) if p["chamber_id"] else []
-        match = sensors.match_weigh_ins([_d(r["day"]) for r in rrows], crs)
+        match = sensors.day_averages([_d(r["day"]) for r in rrows], crs)
         wr = [["Date", "Day", "Weight", "Lost", "°C", "RH", "Note"]]
         for r in rrows:
             day = _d(r["day"])
             m = match.get(day)
             wr.append([_fd(day), str((day - _d(p["dry_start"])).days), f"{r['gross_g']:.0f} g",
                        f"{calc.loss_pct(p['dry_start_gross_g'], r['gross_g'], tare):.1f} %",
-                       f"{m[0]:.1f}" if m and m[0] is not None else "–",
-                       f"{m[1]:.0f} %" if m and m[1] is not None else "–", r["note"] or ""])
+                       (f"{m[0]:.1f}" + ("*" if m[3] else "")) if m and m[0] is not None else "–",
+                       (f"{m[1]:.0f} %" + ("*" if m[3] else "")) if m and m[1] is not None else "–",
+                       r["note"] or ""])
         story.append(_table(_right(wr, (1, 2, 3, 4, 5)),
                             [28 * mm, 12 * mm, 20 * mm, 16 * mm, 14 * mm, 14 * mm, BODY_W - 104 * mm]))
         if crs:
-            story.append(Paragraph("°C and RH: chamber reading nearest 12:00 on the weigh-in day (within 3 hours); "
-                                   "– means the sensor had no data then.", S["small"]))
+            story.append(Paragraph("°C and RH: average of all chamber readings on the weigh-in day; * partial day "
+                                   "(sensor reported for less than half the day); – no readings that day.", S["small"]))
         if p["chamber_id"]:
             cr = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"] or today.isoformat())
             temps = [r["temp_c"] for r in cr if r["temp_c"] is not None]

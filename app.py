@@ -854,17 +854,18 @@ def step_dry_start():
 
 
 def climate_cell(m, i: int) -> str:
+    """Day average for the table; * = partial day (sensor reported for less than half the day)."""
     if not m or m[i] is None:
         return "–"
-    return f"{m[i]:.1f}" if i == 0 else f"{m[i]:.0f}"
+    return (f"{m[i]:.1f}" if i == 0 else f"{m[i]:.0f}") + ("*" if m[3] else "")
 
 
 def weigh_in_climate() -> dict:
-    """{weigh-in day: (temp, rh, reading time) or None} from the drying chamber."""
+    """{weigh-in day: (avg temp, avg rh, readings, partial) or None} from the drying chamber."""
     if not p["chamber_id"]:
         return {}
     cr = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"])
-    return sensors.match_weigh_ins([d(r["day"]) for r in db.reading_rows(con, pid)], cr)
+    return sensors.day_averages([d(r["day"]) for r in db.reading_rows(con, pid)], cr)
 
 
 def chamber_section():
@@ -904,8 +905,8 @@ def chamber_section():
                         x="Time:T", y=f"{field}:Q",
                         tooltip=["Weigh-in:N", alt.Tooltip(f"{field}:Q", title=title, format=".1f")])
                     col.altair_chart(alt.layer(base, rules, dots).properties(height=220), width="stretch")
-            st.caption("Dashed lines: weigh-ins (counted as 12:00). Dots: the chamber reading used for each "
-                       "weigh-in (nearest to 12:00, within 3 hours).")
+            st.caption("Dashed lines: weigh-ins (shown at 12:00). Dots: that day's average temperature and "
+                       "humidity, the values in the weigh-in table.")
             bits = []
             if temps:
                 bits.append(f"temperature {min(temps):.1f} to {max(temps):.1f} °C, average {sum(temps)/len(temps):.1f}")
@@ -1087,9 +1088,12 @@ def step_dry():
             "RH [%]": climate_cell(match.get(d(r["day"])), 1),
             "Note": r["note"] or ""} for r in rows])
         st.dataframe(tdf, hide_index=True, width="stretch", height=300, column_config={
-            "°C": st.column_config.TextColumn(help="Chamber reading nearest 12:00 on the weigh-in day, within "
-                                              "3 hours. – means the sensor had no data then."),
-            "RH [%]": st.column_config.TextColumn()})
+            "°C": st.column_config.TextColumn(help="Average of all chamber readings on the weigh-in day. "
+                                              "* = the sensor reported for less than half the day. "
+                                              "– = no readings that day."),
+            "RH [%]": st.column_config.TextColumn(help="Day average, as for °C.")})
+        if any(m and m[3] for m in match.values()):
+            st.caption("°C and RH: day averages. * partial day (sensor reported for less than half the day).")
     if p["chamber_id"]:
         chamber_section()
     if not d_locked and len(rows) > 1:
