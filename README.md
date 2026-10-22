@@ -55,7 +55,7 @@ python -m bresaola.seed_from_xlsx tests/fixtures/bresaola_v5.xlsx data/bresaola.
 
 **Import from the Tapo app (works everywhere, including Streamlit Cloud).**
 In the Tapo app: sensor → History → View All → download icon → choose interval and range → Export.
-Open the e-mail, save the file, and upload it in **Dry → Chamber → Import from the Tapo app**.
+Open the e-mail, save the file (CSV, or the Excel version), and upload it in **Dry → Chamber → Import from the Tapo app**. If the sensor was out of the chamber for a while, use **Leave out a period** before importing.
 The app shows how many readings, which period and the ranges before importing. Importing an
 overlapping period again replaces those readings; it never doubles them.
 

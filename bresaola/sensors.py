@@ -57,7 +57,10 @@ def _num(v) -> float | None:
         return None
     if isinstance(v, (int, float)):
         return float(v)
-    s = str(v).strip().replace(" ", "").replace("°C", "").replace("°F", "").replace("%", "").strip()
+    s = str(v).strip().replace("\u00a0", "")
+    for unit in ("°C", "°F", "\u2103", "\u2109", "%"):
+        s = s.replace(unit, "")
+    s = s.strip()
     if not s or s in ("-", "--", "N/A", "n/a"):
         return None
     if "," in s and "." not in s:
@@ -109,7 +112,7 @@ def _parse_time(v, dayfirst: bool) -> datetime | None:
 
 def _table(data: bytes, filename: str) -> list[list]:
     name = filename.lower()
-    if name.endswith((".xlsx", ".xlsm")):
+    if name.endswith((".xlsx", ".xlsm")):          # .xlsm: cells only, macros are never run
         from openpyxl import load_workbook
         wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         return [list(r) for r in wb.worksheets[0].iter_rows(values_only=True)]
@@ -128,21 +131,26 @@ def parse_export(data: bytes, filename: str) -> Parsed:
     head_i = None
     for i, r in enumerate(rows[:30]):              # header may follow a few lines of preamble
         h = [str(c) for c in r]
-        if _find(h, TIME_WORDS) is not None and (_find(h, TEMP_WORDS) is not None or _find(h, HUM_WORDS) is not None):
+        if _find(h, TEMP_WORDS) is not None or _find(h, HUM_WORDS) is not None:
             head_i = i
             break
     if head_i is None:
-        raise ValueError("Couldn't find time, temperature and humidity columns in this file. "
+        raise ValueError("Couldn't find temperature or humidity columns in this file. "
                          "Is it the export from the Tapo app?")
     header = [str(c) for c in rows[head_i]]
-    ti, ci, hi = _find(header, TIME_WORDS), _find(header, TEMP_WORDS), _find(header, HUM_WORDS)
+    ci, hi = _find(header, TEMP_WORDS), _find(header, HUM_WORDS)
+    ti = _find(header, TIME_WORDS)
+    if ti is None and 0 not in (ci, hi):
+        ti = 0          # Tapo export: the first column's heading is the date range, e.g. "2026/09/20 ... - ..."
+    if ti is None:
+        raise ValueError("Couldn't find the time column in this file. Is it the export from the Tapo app?")
     # a separate "Time" column next to "Date": combine them
     ti2 = None
     if ti is not None:
-        rest = [i for i, h in enumerate(header) if i != ti and any(w in _norm(h) for w in TIME_WORDS)]
+        rest = [i for i, h in enumerate(header) if i not in (ti, ci, hi) and any(w in _norm(h) for w in TIME_WORDS)]
         if rest and not any(w in _norm(header[ti]) for w in ("time", "zeit")):
             ti2 = rest[0]
-    fahrenheit = ci is not None and ("°f" in _norm(header[ci]) or "fahrenheit" in _norm(header[ci]))
+    fahrenheit = ci is not None and any(x in _norm(header[ci]) for x in ("°f", "℉", "fahrenheit"))
     body = rows[head_i + 1:]
 
     def cell(r, i):
@@ -172,6 +180,14 @@ def parse_export(data: bytes, filename: str) -> Parsed:
     if not out.rows:
         raise ValueError("The file has the right columns but no readings could be read from it.")
     return out
+
+
+def leave_out(rows, start: datetime | None, end: datetime | None):
+    """Drop readings from start to end inclusive (e.g. the sensor was out of the chamber)."""
+    if not start or not end:
+        return rows, 0
+    kept = [r for r in rows if not start <= r[0] <= end]
+    return kept, len(rows) - len(kept)
 
 
 def import_readings(con, chamber_id: int, rows, source: str) -> tuple[int, int]:

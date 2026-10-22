@@ -71,7 +71,7 @@ def test_xlsx_with_real_datetimes():
 
 
 def test_wrong_file_gives_readable_error():
-    with pytest.raises(ValueError, match="Couldn't find time, temperature and humidity"):
+    with pytest.raises(ValueError, match="Couldn.t find temperature or humidity"):
         sensors.parse_export(b"name,amount\nsalt,62.6\n", "spices.csv")
 
 
@@ -165,3 +165,39 @@ def test_dry_step_shows_chamber_section(con, monkeypatch):
     assert any(e.label.startswith("Chamber: Fridge drawer") for e in at.expander)
     assert any("Import from the Tapo app" in m.value for m in at.markdown)
     assert not any(b.label == "Sync last 24 h from hub" for b in at.button)       # not configured here
+
+
+# ---- the real Tapo export layout (22 Oct 2026 file) -----------------------------------
+
+REAL_HEADER = "2026/09/20 00:00:00 - 2026/10/23 00:00:00,Temperature(℃),Abnormal,Humidity(%),Abnormal"
+
+
+def test_real_tapo_csv_layout():
+    data = ("﻿" + REAL_HEADER + "\n20/09/2026 16:30,1.3,,63,*\n03/10/2026 15:00,-16.9,*,68,*\n"
+            "22/10/2026 09:00,2.1,,84,*\n").encode("utf-8")
+    p = sensors.parse_export(data, "tapo_export.csv")
+    assert p.columns == (REAL_HEADER.split(",")[0], "Temperature(℃)", "Humidity(%)")
+    assert p.rows == [(datetime(2026, 9, 20, 16, 30), 1.3, 63.0), (datetime(2026, 10, 3, 15, 0), -16.9, 68.0),
+                      (datetime(2026, 10, 22, 9, 0), 2.1, 84.0)]
+    assert not p.fahrenheit
+
+
+def test_real_tapo_excel_layout_xlsm():
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.append(REAL_HEADER.split(","))
+    ws.append([datetime(2026, 9, 20, 16, 30), 1.3, None, 63, "*"])
+    ws.append([datetime(2026, 9, 20, 16, 45), 1.6, None, 67, "*"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    p = sensors.parse_export(buf.getvalue(), "tapo_export.xlsm")
+    assert [r[0] for r in p.rows] == [datetime(2026, 9, 20, 16, 30), datetime(2026, 9, 20, 16, 45)]
+
+
+def test_leave_out_a_period():
+    rows = [(datetime(2026, 10, 3, 12, 0), 2.0, 80.0), (datetime(2026, 10, 3, 12, 15), 4.1, 82.0),
+            (datetime(2026, 10, 9, 4, 0), 2.0, 81.0), (datetime(2026, 10, 9, 4, 15), 2.0, 81.0)]
+    kept, n = sensors.leave_out(rows, datetime(2026, 10, 3, 12, 15), datetime(2026, 10, 9, 4, 0))
+    assert n == 2 and [r[0].hour for r in kept] == [12, 4] and kept[1][0].minute == 15
+    assert sensors.leave_out(rows, None, None) == (rows, 0)

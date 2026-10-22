@@ -884,7 +884,7 @@ def chamber_section():
         st.markdown("**Import from the Tapo app**")
         st.caption("In the Tapo app: sensor → History → View All → download icon → pick interval and range. "
                    "Attach the file from the e-mail here. Importing the same period again replaces, never doubles.")
-        up = st.file_uploader("Tapo export", type=["csv", "xlsx"], key=f"tapo{pid}{st.session_state.get('tapo_n', 0)}",
+        up = st.file_uploader("Tapo export", type=["csv", "xlsx", "xlsm"], key=f"tapo{pid}{st.session_state.get('tapo_n', 0)}",
                               label_visibility="collapsed")
         if up is not None:
             try:
@@ -893,9 +893,29 @@ def chamber_section():
                 st.error(str(e))
                 parsed = None
             if parsed:
+                with st.expander("Leave out a period (sensor was out of the chamber)"):
+                    c1, c2, c3, c4 = st.columns(4)
+                    lo_d = c1.date_input("From", value=None, format="DD/MM/YYYY", key=f"lo_d{pid}")
+                    # quarter-hour list, not st.time_input: that widget crashed on some browser locales
+                    quarters = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
+                    lo_t = c2.selectbox("at", quarters, index=0, key=f"lo_t{pid}")
+                    hi_d = c3.date_input("To", value=None, format="DD/MM/YYYY", key=f"hi_d{pid}")
+                    hi_t = c4.selectbox("at ", quarters, index=len(quarters) - 1, key=f"hi_t{pid}",
+                                        help="Inclusive: a reading at exactly this time is left out too")
+                lo = datetime.combine(lo_d, datetime.strptime(lo_t, "%H:%M").time()) if lo_d else None
+                hi = datetime.combine(hi_d, datetime.strptime(hi_t, "%H:%M").time()) if hi_d else None
+                if lo and hi and hi < lo:
+                    st.error("'To' is before 'From'.")
+                    lo = hi = None
+                parsed.rows, left_out = sensors.leave_out(parsed.rows, lo, hi)
+                if left_out:
+                    st.caption(f"Leaving out {left_out} readings from {lo:%d %b %H:%M} to {hi:%d %b %H:%M}.")
+                if not parsed.rows:
+                    st.warning("Nothing left to import.")
+                    return
                 temps = [t for _, t, _ in parsed.rows if t is not None]
                 rhs = [h for _, _, h in parsed.rows if h is not None]
-                st.info(f"**{len(parsed.rows)} readings** from {parsed.first:%d %b %Y %H:%M} to "
+                st.info(f"**{len(parsed.rows)} readings** to import, from {parsed.first:%d %b %Y %H:%M} to "
                         f"{parsed.last:%d %b %Y %H:%M}"
                         + (f"; temperature {min(temps):.1f} to {max(temps):.1f} °C" if temps else "")
                         + (" (converted from °F)" if parsed.fahrenheit else "")
