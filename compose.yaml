@@ -16,10 +16,14 @@ services:
       BRESAOLA_DATA: /data
       BRESAOLA_TZ: Europe/Berlin
       TZ: Europe/Berlin
-      PORT: "8503"           # same as --server.port above; used by the health check
       # Tapo hub sync (optional): fill in, then the Dry step shows "Sync last 24 h from hub"
       # TAPO_USERNAME: you@example.com
       # TAPO_PASSWORD: your-tapo-password
       # TAPO_HUB_IP: 192.168.1.50
       # TAPO_SENSORS: Fridge drawer=<sensor nickname in the Tapo app>
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8503/_stcore/health')"]
+      interval: 60s
+      timeout: 5s
+      start_period: 30s
     restart: unless-stopped

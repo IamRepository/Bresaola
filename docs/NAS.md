@@ -23,7 +23,7 @@ nothing, and the two do not share data.
 6. Open `http://<NAS IP>:8503`. The app uses host networking (`network_mode: host`): it listens on the
    NAS's own address, because Docker's port forwarding did not work on this Synology (the start failed with
    "driver failed programming external connectivity", then the port timed out). To use another port, change
-   `--server.port=8503` in `compose.yaml` and add `PORT: <same number>` under `environment`.
+   `8503` in both the `command` and the `healthcheck` lines of `compose.yaml`.
    Check: version **v0.4.1** (or later) under "Bresaola Tracker", **no** yellow test-mode note,
    no demo project.
 
