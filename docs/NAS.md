@@ -20,10 +20,11 @@ nothing, and the two do not share data.
    - Source: use the existing `compose.yaml`
    - Skip the Web Station / web portal step → **Done**.
    The first build downloads Python and the packages: allow several minutes.
-6. Open `http://<NAS IP>:8503`. The app uses host networking (`network_mode: host`): it listens on the
-   NAS's own address, because Docker's port forwarding did not work on this Synology (the start failed with
-   "driver failed programming external connectivity", then the port timed out). To use another port, change
-   `8503` in both the `command` and the `healthcheck` lines of `compose.yaml`.
+6. Open `http://<NAS IP>:8520`. Two things learned on this NAS:
+   - **MailPlus Server reserves ports 8500–8507** (also 5230, 5252, 9526–9529, 10025, 10465, 10587, 11211,
+     12340, 24245, 24246) and drops outside connections to them. Pick a port outside that list.
+   - The app uses host networking (`network_mode: host`): it listens on the NAS's own address. To use another
+     port, change `8520` in both the `command` and the `healthcheck` lines of `compose.yaml`.
    Check: version **v0.4.1** (or later) under "Bresaola Tracker", **no** yellow test-mode note,
    no demo project.
 
@@ -35,7 +36,7 @@ nothing, and the two do not share data.
    with **Leave out a period** 03/10/2026 12:15 to 09/10/2026 04:00.
 
 ## 4. From your phone (outside home)
-10. If Tailscale is on the NAS, open `http://<NAS Tailscale name>:8503`.
+10. If Tailscale is on the NAS, open `http://<NAS Tailscale name>:8520`.
     No router port forwarding.
 
 ## 5. Backups

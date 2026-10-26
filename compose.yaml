@@ -4,10 +4,11 @@ services:
     build: .
     image: bresaola-tracker
     container_name: bresaola
-    # Host networking: the app listens straight on the NAS's own address (no Docker port forwarding,
-    # which did not work on this Synology). Open http://<NAS IP>:8503
+    # Host networking: the app listens straight on the NAS's own address (no Docker port forwarding).
+    # Port 8520: MailPlus Server reserves 8500-8507 and drops outside connections to them.
+    # Open http://<NAS IP>:8520
     network_mode: host
-    command: ["streamlit", "run", "app.py", "--server.port=8503", "--server.address=0.0.0.0",
+    command: ["streamlit", "run", "app.py", "--server.port=8520", "--server.address=0.0.0.0",
               "--server.headless=true", "--browser.gatherUsageStats=false"]
     volumes:
       - ./data:/data         # database + photos live here, outside the container
@@ -22,7 +23,7 @@ services:
       # TAPO_HUB_IP: 192.168.1.50
       # TAPO_SENSORS: Fridge drawer=<sensor nickname in the Tapo app>
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8503/_stcore/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8520/_stcore/health')"]
       interval: 60s
       timeout: 5s
       start_period: 30s
