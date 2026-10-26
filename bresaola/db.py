@@ -259,9 +259,11 @@ SENSOR_SOURCES = ("tapo_export", "tapo_api")       # readings from the sensor (n
 
 
 def sensor_readings_between(con, chamber_id: int, start, end) -> int:
-    """How many sensor readings are already stored from start to end (inclusive)."""
+    """How many sensor readings from start to end (inclusive) would be removed: those inside locked
+    drying periods are kept, so they aren't counted."""
     return con.execute(f"""SELECT COUNT(*) FROM chamber_reading WHERE chamber_id=? AND ts >= ? AND ts <= ?
-                           AND source IN {SENSOR_SOURCES}""", (chamber_id, _iso(start), _iso(end))).fetchone()[0]
+                           AND source IN {SENSOR_SOURCES} AND {_OUTSIDE_LOCKED}""",
+                       (chamber_id, _iso(start), _iso(end))).fetchone()[0]
 
 
 def delete_chamber_readings(con, chamber_id: int, source: str, start=None, end=None) -> tuple[int, int]:

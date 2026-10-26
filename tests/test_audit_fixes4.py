@@ -137,3 +137,13 @@ def test_pdf_marks_unsafe_day_values(env):
         sensors.import_readings(env, ch, [(datetime(2026, 9, 26, h), 7.0, 80.0) for h in range(24)], "tapo_export")
     t = " ".join(" ".join(pg.extract_text() for pg in PdfReader(io.BytesIO(report.build_pdf(env, 1))).pages).split())
     assert "7.0 ⚠" in t and "outside the safe range for a fridge" in t
+
+
+def test_leave_out_count_skips_locked_drying(env):
+    """Diff audit v0.4.4 (Low): the caption counted readings that the delete keeps."""
+    ch = db.project(env, 1)["chamber_id"]
+    with env:
+        sensors.import_readings(env, ch, [(datetime(2026, 10, 3, 13), 2.0, 80.0),
+                                          (datetime(2026, 10, 10, 13), 2.0, 80.0)], "tapo_export")
+        db.lock_dry(env, 1, date(2026, 10, 8))                          # 3 Oct is inside the locked period
+    assert db.sensor_readings_between(env, ch, datetime(2026, 10, 1), datetime(2026, 10, 11)) == 1
