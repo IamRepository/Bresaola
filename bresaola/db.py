@@ -150,7 +150,8 @@ def _iso(d) -> str | None:
 MIGRATIONS = {"project": [("start_date", "TEXT"), ("spice_note", "TEXT"),
                           ("cure_locked_at", "TEXT"), ("dry_locked_at", "TEXT"),
                           ("equalise_locked_at", "TEXT"), ("cure_fridge_c", "REAL")],
-              "photo": [("stage", "TEXT")]}
+              "photo": [("stage", "TEXT")],
+              "chamber": [("kind", "TEXT")]}
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
@@ -173,6 +174,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
                     con.execute("UPDATE project SET equalise_locked_at = equalise_end || 'T00:00:00' "
                                 "WHERE equalise_end IS NOT NULL")
     con.execute("UPDATE project SET start_date = substr(created_at, 1, 10) WHERE start_date IS NULL")
+    con.execute("UPDATE chamber SET kind = 'fridge' WHERE kind IS NULL")   # all chambers so far were fridges
     # v0.2 had a separate cure "Method" field; fold it into the cure notes once
     con.execute("""UPDATE project SET cure_note = CASE WHEN cure_note IS NULL OR cure_note = ''
                        THEN cure_method ELSE cure_method || char(10) || cure_note END,
@@ -189,11 +191,26 @@ def log(con, project_id: int, kind: str, detail: str = "") -> None:
 
 # ----------------------------- chamber ------------------------------------- #
 
-def get_or_create_chamber(con, name: str, sensor: str | None = None) -> int:
+def get_or_create_chamber(con, name: str, sensor: str | None = None, kind: str = "fridge") -> int:
     row = con.execute("SELECT id FROM chamber WHERE name=?", (name,)).fetchone()
     if row:
         return row["id"]
-    return con.execute("INSERT INTO chamber (name, sensor) VALUES (?,?)", (name, sensor)).lastrowid
+    return con.execute("INSERT INTO chamber (name, sensor, kind) VALUES (?,?,?)", (name, sensor, kind)).lastrowid
+
+
+def set_chamber_kind(con, chamber_id: int, kind: str) -> None:
+    """'fridge' (about 0-4 °C) or 'chamber' (curing chamber, about 10-15 °C): sets which temperature rules apply."""
+    if kind not in ("fridge", "chamber"):
+        raise ValueError("Kind must be 'fridge' or 'chamber'")
+    con.execute("UPDATE chamber SET kind=? WHERE id=?", (kind, chamber_id))
+
+
+def chamber_kind(con, project_row) -> str | None:
+    """The drying kind for a project, or None before drying has a chamber."""
+    if not project_row["chamber_id"]:
+        return None
+    r = con.execute("SELECT kind FROM chamber WHERE id=?", (project_row["chamber_id"],)).fetchone()
+    return (r["kind"] or "fridge") if r else None
 
 
 TEMP_RANGE = (-5.0, 30.0)     # °C, a curing fridge or chamber

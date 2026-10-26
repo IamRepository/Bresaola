@@ -2,7 +2,7 @@
 
 Records home-cured bresaola batches from spice mix to slicing: calculated amounts, cure time, weigh-ins, chamber temperature/humidity and photos, then a PDF summary when the batch is closed.
 
-**Status: v0.4.0 — journey layout, PDF summary, Tapo sensor import, food-safety checks.**
+**Status: v0.4.1 — journey layout, PDF summary, Tapo sensor import, food-safety checks.**
 
 ## Steps (journey rail at the top; a next-action card says what to do today)
 1. **Day 0: spice and bag** – meat weight, EcoCure on/off, blend → planned grams, actual amounts; measure the piece and seal the bag (cure time shown live). *Done* locks day 0 and starts the cure.
@@ -53,11 +53,12 @@ python -m bresaola.seed_from_xlsx tests/fixtures/bresaola_v5.xlsx data/bresaola.
 
 ## Food-safety checks (v0.4.0)
 Thresholds live in `bresaola/safety.py`; the app and the PDF read them from there.
-- **Curing salt** is a required choice for every new project (no default). Without it, a warning shows on every step and in the PDF; changes are logged.
+- **Where it dries:** every drying chamber is a **Fridge** (about 0–4 °C) or a **Curing chamber** (about 10–15 °C). The temperature rules follow the type; existing chambers are fridges. Change it in Dry → Chamber → Type.
+- **Curing salt** is a required choice for every new project (no default); changes are logged. Without it: in a fridge, an information note (below about 3 °C botulism bacteria can't grow; keep the fridge under 4 °C), turning into a warning if the fridge was warmer than 4 °C; in a curing chamber, a warning. Same in the PDF.
 - **Cure length:** green when the planned days are reached (longer is fine), amber past the calculator minimum but short of the +20 % margin, red below the minimum. Locking a cure below the minimum needs an explicit confirmation, recorded in the history and the PDF.
 - **Cure fridge temperature** (optional, Cure step): warning above 4 °C.
 - **Weight-loss target:** 25–50 % allowed, warning outside 30–40 %. Loss is measured on the meat at the start of drying (start weight minus packaging), which is stricter than measuring from the raw weight.
-- **Drying chamber**, judged on hourly averages: warnings above 15 °C, above 90 % or below 65 % humidity; a note (not a warning) when the average is below 10 °C (safe, slow). Out-of-range averages are marked ⚠ in the weigh-in table.
+- **Drying temperature and humidity**, judged on hourly averages: fridge warning above 4 °C, curing chamber warning above 15 °C (and a "slow" note below 10 °C); humidity warnings above 90 % (mould) or below 65 % (case hardening) for both. Out-of-range averages are marked ⚠ in the weigh-in table.
 
 ## Chamber temperature and humidity (Tapo T310/T315)
 

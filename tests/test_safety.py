@@ -66,10 +66,26 @@ def test_new_project_needs_a_curing_salt_choice(con):
     assert not any(safety.NO_CURE_WARNING in w.value for w in at.warning)     # cured batch: no banner
 
 
-def test_no_curing_salt_warning_everywhere(con):
+def test_no_curing_salt_message_everywhere(con):
+    # Palermo dries in a fridge at about 2 °C: an information note on every step, not an alarm
     for step in ("day0", "cure", "dry", "finish"):
-        assert any(safety.NO_CURE_WARNING in w.value for w in app(step).warning), step
-    assert "No curing salt" in pdf_text(con)
+        at = app(step)
+        assert any("No curing salt" in i.value and "Drying in a fridge" in i.value for i in at.info), step
+        assert not any("No curing salt" in w.value for w in at.warning), step
+    assert "Drying in a fridge" in pdf_text(con)
+
+
+def test_no_curing_salt_in_a_curing_chamber_is_a_warning(con):
+    with con:
+        db.set_chamber_kind(con, db.project(con, 1)["chamber_id"], "chamber")
+    assert any(safety.NO_CURE_WARNING in w.value for w in app().warning)
+    assert "chamber temperatures" in pdf_text(con)
+
+
+def test_no_curing_salt_and_a_warm_fridge_is_a_warning(con):
+    with con:
+        sensors.import_readings(con, 1, [(datetime(2026, 10, 8, h), 6.0, 80.0) for h in range(10, 13)], "tapo_export")
+    assert any("No curing salt, and the fridge was warmer than 4 °C for 3 h" in w.value for w in app().warning)
 
 
 def test_curing_salt_change_is_logged(con):
@@ -167,22 +183,35 @@ def test_chamber_warnings_use_hourly_averages():
     assert "mould" in safety.chamber_warnings(wet)[0][0]
 
 
-def test_cold_fridge_is_a_note_not_a_warning():
+def test_cold_fridge_gives_no_warning_and_no_slow_note():
     cold = _rows([(datetime(2026, 10, 1, h), 2.0, 82) for h in range(24)])
-    warnings, notes = safety.chamber_warnings(cold)
-    assert warnings == [] and "safe, but drying is slow" in notes[0]
+    assert safety.chamber_warnings(cold, "fridge") == ([], [])
 
 
 def test_chamber_warning_shown_and_table_flagged(con):
     with con:
         sensors.import_readings(con, 1, [(datetime(2026, 10, 8, h), 18.0, 60.0) for h in range(10, 14)], "tapo_export")
     at = app()
-    assert any("Warmer than 15 °C" in w.value for w in at.warning)
+    assert any("Fridge warmer than 4 °C" in w.value for w in at.warning)          # Palermo: a fridge
     assert any("case hardening" in w.value for w in at.warning)
     df = at.dataframe[0].value
     row = df[df["Date"] == "08 Oct"].iloc[0]
     assert row["Day °C"].endswith("⚠") and row["Day RH [%]"].endswith("⚠")
-    assert "Warmer than 15 °C" in pdf_text(con)
+    assert "Fridge warmer than 4 °C" in pdf_text(con)
+
+
+def test_fridge_and_chamber_rules_differ():
+    five = _rows([(datetime(2026, 10, 1, h), 5.0, 80) for h in range(24)])
+    assert "Fridge warmer than 4 °C" in safety.chamber_warnings(five, "fridge")[0][0]
+    w, notes = safety.chamber_warnings(five, "chamber")
+    assert w == [] and "safe, but drying is slow" in notes[0]           # 5 °C is cold for a chamber
+    assert safety.out_of_range("t", 5.0, "fridge") and not safety.out_of_range("t", 5.0, "chamber")
+
+
+def test_existing_chambers_become_fridges(con):
+    assert {c["kind"] for c in db.chambers(con)} == {"fridge"}
+    with pytest.raises(ValueError):
+        db.set_chamber_kind(con, 1, "garage")
 
 
 def test_cure_fridge_temperature(con):

@@ -209,8 +209,12 @@ def build_pdf(con, pid: int) -> bytes:
              "EcoCure #2" if p["ecocure"] else "no EcoCure", status]
     story.append(Paragraph(_text(" · ".join(facts)), S["sub"]))
     story.append(Spacer(1, 6))
+    kind = db.chamber_kind(con, p)
     if not p["ecocure"]:
-        story.append(_alert(safety.NO_CURE_WARNING))
+        dry_rows = (db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"])
+                    if p["chamber_id"] and p["dry_start"] else [])
+        level, text = safety.no_cure_message(kind, dry_rows)
+        story.append(_alert(text) if level == "warning" else Paragraph(_text(text), S["small"]))
     story.append(Spacer(1, 4))
 
     # --- result -------------------------------------------------------------------------- #
@@ -309,7 +313,7 @@ def build_pdf(con, pid: int) -> bytes:
             f"Target {p['target_loss_pct']:g} % weight loss on the meat at the start of drying (start weight "
             f"minus packaging) = {s['target_gross_g']:.0f} g incl. wrap + net. "
             f"Packaging (wrap + net) {tare:.0f} g{' (estimate)' if p['tare_estimated'] else ''}."
-            + (f" Chamber: {ch['name']}." if ch else "")), S["body"]))
+            + (f" Dried in: {ch['name']} ({safety.KINDS[kind or 'fridge'].lower()})." if ch else "")), S["body"]))
         head += [Spacer(1, 4), _chart(rs, _d(p["dry_start"]), s["target_gross_g"])]
         story.append(KeepTogether(head))
         crs = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"]) if p["chamber_id"] else []
@@ -349,7 +353,7 @@ def build_pdf(con, pid: int) -> bytes:
                 story.append(Spacer(1, 3))
                 story.append(Paragraph(_text(f"Chamber during drying ({len(cr)} readings): " + "; ".join(bits) + "."),
                                        S["small"]))
-            warns, notes_ = safety.chamber_warnings(cr)
+            warns, notes_ = safety.chamber_warnings(cr, kind or "fridge")
             for w in warns:
                 story.append(Spacer(1, 3))
                 story.append(_alert(w))

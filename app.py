@@ -307,8 +307,13 @@ facts = [p["blend"], f"{p['green_weight_g']:.0f} g raw meat after trimming",
 if closed:
     facts.append(f"closed {d(p['closed_at'][:10]):%d %b %Y}")
 st.caption(",  ".join(facts))
+KIND = db.chamber_kind(con, p)          # 'fridge', 'chamber' or None before drying
 if not p["ecocure"]:
-    st.warning(safety.NO_CURE_WARNING, icon=":material/warning:")
+    dry_rows = (db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"])
+                if p["chamber_id"] and p["dry_start"] else [])
+    level, text = safety.no_cure_message(KIND, dry_rows)
+    (st.warning if level == "warning" else st.info)(text, icon=":material/warning:" if level == "warning"
+                                                      else ":material/info:")
 
 # --------------------------------------------------------------------------- #
 # journey rail
@@ -875,6 +880,9 @@ def step_dry_start():
         c4, c5 = st.columns(2)
         ch_name = c4.selectbox("Drying chamber", names + ["+ New chamber"]) if names else "+ New chamber"
         new_ch = c5.text_input("New chamber name", value="Fridge drawer") if ch_name == "+ New chamber" else None
+        new_kind = st.radio("New chamber type", list(safety.KINDS), format_func=safety.KINDS.get, horizontal=True,
+                            help="Fridge: about 0-4 °C. Curing chamber: about 10-15 °C. Sets the temperature "
+                                 "rules.") if ch_name == "+ New chamber" else None
         with st.expander("Packaging weight (optional)"):
             tare = st.number_input("Packaging: wrap + net [g]", min_value=0.0, value=0.0, step=1.0, format="%.0f")
             tare_est = st.checkbox("Packaging weight is an estimate", value=True)
@@ -888,7 +896,7 @@ def step_dry_start():
                 return
 
             def start_drying(con_, pid_):          # one transaction: no stray chamber if drying fails
-                ch = db.get_or_create_chamber(con_, ch_label)
+                ch = db.get_or_create_chamber(con_, ch_label, kind=new_kind or "fridge")
                 db.set_drying(con_, pid_, start=ds, start_gross_g=sg, chamber_id=ch, tare_g=tare,
                               tare_estimated=tare_est, target_loss_pct=tp)
             act(start_drying, pid, success="Drying started")
@@ -899,7 +907,7 @@ def climate_cell(m, i: int) -> str:
     ⚠ = outside the safe drying range (see bresaola/safety.py)."""
     if not m or m[i] is None:
         return "–"
-    flag = " ⚠" if safety.out_of_range("t" if i == 0 else "h", m[i]) else ""
+    flag = " ⚠" if safety.out_of_range("t" if i == 0 else "h", m[i], KIND or "fridge") else ""
     return (f"{m[i]:.1f}" if i == 0 else f"{m[i]:.0f}") + ("*" if m[3] else "") + flag
 
 
@@ -929,6 +937,13 @@ def chamber_section():
     cr = db.chamber_readings(con, ch["id"], p["dry_start"], p["dry_end"])
     # fixed title: a title that changes (e.g. with the reading count) makes the section close on every rerun
     with st.expander(f"Chamber: {ch['name']}", key=f"chamber_exp{pid}"):
+        kinds = list(safety.KINDS)
+        new_kind = st.segmented_control(
+            "Type", kinds, default=ch["kind"] or "fridge", key=f"chkind{pid}", disabled=closed,
+            format_func=lambda k_: f"{safety.KINDS[k_]} (warn above {safety.TEMP_MAX[k_]:g} °C)",
+            help="Sets which temperature rules apply. Applies to every project using this chamber.")
+        if new_kind and new_kind != (ch["kind"] or "fridge"):
+            act(db.set_chamber_kind, ch["id"], new_kind, success=f"{ch['name']} is now a {safety.KINDS[new_kind].lower()}")
         if not cr:
             st.caption("No readings yet for the drying period.")
         if cr:
@@ -992,7 +1007,7 @@ def chamber_section():
                 bits.append(f"temperature {min(temps):.1f} to {max(temps):.1f} °C, average {sum(temps)/len(temps):.1f}")
             if rhs:
                 bits.append(f"humidity {min(rhs):.0f} to {max(rhs):.0f} %, average {sum(rhs)/len(rhs):.0f}")
-            for n_ in safety.chamber_warnings(cr)[1]:
+            for n_ in safety.chamber_warnings(cr, ch["kind"] or "fridge")[1]:
                 st.info(n_, icon=":material/ac_unit:")
             st.caption(f"{len(cr)} readings since drying started: {'; '.join(bits)}. Last reading {fmt_date(cr[-1]['ts'][:10])} "
                        f"{cr[-1]['ts'][11:16]}.")
@@ -1188,11 +1203,12 @@ def step_dry():
                                                 "sensor readings. Under 50 % the averages get a *.")})
     st.caption("Day: average on the weigh-in day. Since last: average since the previous weigh-in, the "
                "conditions behind that weight loss. * less than half the time covered by sensor data; – none; "
-               f"⚠ outside the safe drying range (above {safety.DRY_TEMP_MAX:g} °C, humidity outside "
+               f"⚠ outside the safe range for a {safety.KINDS[KIND or 'fridge'].lower()} (above "
+               f"{safety.TEMP_MAX[KIND or 'fridge']:g} °C, humidity outside "
                f"{safety.RH_MIN:g}-{safety.RH_MAX:g} %).")
     if p["chamber_id"]:
         cr_dry = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"])
-        for w_ in safety.chamber_warnings(cr_dry)[0]:
+        for w_ in safety.chamber_warnings(cr_dry, KIND or "fridge")[0]:
             st.warning(w_, icon=":material/thermostat:")
         chamber_section()
     if not d_locked and len(rows) > 1:
