@@ -20,7 +20,7 @@
 
 When a trigger applies, say so and recommend a full audit; the owner decides.
 
-**Last full audit:** 26 Oct 2026 on v0.4.2 (commit 9f51343).
+**Last full audit:** 26 Oct 2026 on v0.4.2 (commit 9f51343): 21 findings, list in the project notes (claude.ai).
 **Last diff audit:** none yet.
 
 ## Other rules
