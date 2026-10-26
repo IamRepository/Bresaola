@@ -24,7 +24,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (Image, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table,
                                 TableStyle)
 
-from . import __version__, calc, db, sensors, storage
+from . import __version__, calc, db, safety, sensors, storage
 
 FONT_DIR = Path(__file__).parent / "fonts"
 pdfmetrics.registerFont(TTFont("DejaVu", str(FONT_DIR / "DejaVuSans.ttf")))
@@ -94,6 +94,20 @@ def _right(rows, cols):
     """Wrap numeric cells so they align right inside Paragraph tables."""
     st = ParagraphStyle("r", parent=S["cell"], alignment=2)
     return [[Paragraph(_text(str(c)), st) if i in cols else c for i, c in enumerate(r)] for r in rows]
+
+
+WARN = colors.HexColor("#8a5a00")
+WARN_BG = colors.HexColor("#fbf1dc")
+
+
+def _alert(text: str):
+    """Amber box for safety warnings."""
+    t = Table([[Paragraph("<b>Warning:</b> " + _text(text), ParagraphStyle("w", parent=S["body"], textColor=WARN))]],
+              colWidths=[BODY_W])
+    t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), WARN_BG), ("BOX", (0, 0), (-1, -1), 0.6, WARN),
+                           ("LEFTPADDING", (0, 0), (-1, -1), 7), ("TOPPADDING", (0, 0), (-1, -1), 5),
+                           ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+    return t
 
 
 def _band(cells, cols=3):
@@ -194,7 +208,10 @@ def build_pdf(con, pid: int) -> bytes:
     facts = [p["blend"], f"{p['green_weight_g']:.0f} g raw meat after trimming",
              "EcoCure #2" if p["ecocure"] else "no EcoCure", status]
     story.append(Paragraph(_text(" · ".join(facts)), S["sub"]))
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
+    if not p["ecocure"]:
+        story.append(_alert(safety.NO_CURE_WARNING))
+    story.append(Spacer(1, 4))
 
     # --- result -------------------------------------------------------------------------- #
     tare = p["tare_g"] or 0
@@ -266,7 +283,21 @@ def build_pdf(con, pid: int) -> bytes:
             f"Equilibrium cure in a vacuum bag. Piece: {p['shape']}, {p['thickness_cm']:g} cm thick{est}"
             + (f", {p['length_cm']:g} cm long" if p["length_cm"] else "")
             + f". Calculator minimum {mins:.1f} days + 20 % = {calc.cure_days(p['thickness_cm'], p['shape'])} days"
-            + (f"; actual {cure_days} days." if cure_days is not None else ".")), S["body"]))
+            + (f"; actual {cure_days} days." if cure_days is not None else ".")
+            + (f" Cure fridge {p['cure_fridge_c']:g} °C." if p["cure_fridge_c"] is not None else "")), S["body"]))
+        length = db.cure_length(p)
+        if length == "below_min":
+            confirmed = any(e["kind"] == "cure_locked" and "below calculator minimum" in (e["detail"] or "")
+                            for e in db.events(con, pid))
+            story.append(_alert(f"The cure ({cure_days} days) was shorter than the calculator minimum "
+                                f"({mins:.1f} days): the salt may not have reached the centre."
+                                + (" Locked anyway, confirmed by the maker." if confirmed else "")))
+        elif length == "short":
+            story.append(Paragraph(_text(f"The cure was past the calculator minimum but short of the planned "
+                                         f"{calc.cure_days(p['thickness_cm'], p['shape'])} days (20 % margin)."),
+                                   S["small"]))
+        if w := safety.cure_fridge_warning(p["cure_fridge_c"]):
+            story.append(_alert(w))
 
     # --- drying -------------------------------------------------------------------------- #
     if p["dry_start"] and rs:
@@ -275,7 +306,8 @@ def build_pdf(con, pid: int) -> bytes:
         ch = con.execute("SELECT name FROM chamber WHERE id=?", (p["chamber_id"],)).fetchone() \
             if p["chamber_id"] else None
         head.append(Paragraph(_text(
-            f"Target {p['target_loss_pct']:g} % weight loss on the meat = {s['target_gross_g']:.0f} g incl. wrap + net. "
+            f"Target {p['target_loss_pct']:g} % weight loss on the meat at the start of drying (start weight "
+            f"minus packaging) = {s['target_gross_g']:.0f} g incl. wrap + net. "
             f"Packaging (wrap + net) {tare:.0f} g{' (estimate)' if p['tare_estimated'] else ''}."
             + (f" Chamber: {ch['name']}." if ch else "")), S["body"]))
         head += [Spacer(1, 4), _chart(rs, _d(p["dry_start"]), s["target_gross_g"])]
@@ -317,6 +349,15 @@ def build_pdf(con, pid: int) -> bytes:
                 story.append(Spacer(1, 3))
                 story.append(Paragraph(_text(f"Chamber during drying ({len(cr)} readings): " + "; ".join(bits) + "."),
                                        S["small"]))
+            warns, notes_ = safety.chamber_warnings(cr)
+            for w in warns:
+                story.append(Spacer(1, 3))
+                story.append(_alert(w))
+            for n in notes_:
+                story.append(Paragraph(_text(n), S["small"]))
+        if w := safety.target_warning(float(p["target_loss_pct"])):
+            story.append(Spacer(1, 3))
+            story.append(_alert(w))
 
     # --- notes --------------------------------------------------------------------------- #
     notes = [("Day 0", p["spice_note"]), ("Cure", p["cure_note"]), ("Drying", p["dry_note"]),

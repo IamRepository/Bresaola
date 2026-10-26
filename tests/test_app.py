@@ -71,6 +71,7 @@ def project(tmp_path, pid=1):
 def new_project(at, name="New piece", weight=1000):
     next(t for t in at.sidebar.text_input if t.label == "Name").input(name)
     next(n for n in at.sidebar.number_input if n.label == "Meat weight [g]").set_value(weight)
+    next(r for r in at.sidebar.radio if r.label == "Curing salt").set_value("Without curing salt")
     btn(at.sidebar, "Create project").click()
     at.run()
     ok(at)
@@ -145,6 +146,7 @@ def test_new_project_starts_on_day0_and_done_jumps_to_cure(app, tmp_path):
 def test_new_project_with_own_start_date(app):
     next(t for t in app.sidebar.text_input if t.label == "Name").input("Back-dated")
     next(d for d in app.sidebar.date_input if d.label == "Start date").set_value(date(2026, 9, 1))
+    next(r for r in app.sidebar.radio if r.label == "Curing salt").set_value("Without curing salt")
     btn(app.sidebar, "Create project").click()
     app.run(); ok(app)
     assert app.header[0].value == "26/09/01 Back-dated"

@@ -132,6 +132,7 @@ def btn(a, label):
 def new_project(a, name, weight=1000):
     next(t for t in a.sidebar.text_input if t.label == "Name").input(name)
     next(n for n in a.sidebar.number_input if n.label == "Meat weight [g]").set_value(weight)
+    next(r for r in a.sidebar.radio if r.label == "Curing salt").set_value("Without curing salt")
     btn(a.sidebar, "Create project").click()
     run(a)
 

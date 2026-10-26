@@ -17,7 +17,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from bresaola import __version__, calc, db, report, sensors, storage, tapo_sync
+from bresaola import __version__, calc, db, report, safety, sensors, storage, tapo_sync
 from bresaola.blends import BLENDS
 from bresaola.demo import seed_demo
 
@@ -40,9 +40,11 @@ PALETTE = {
     "GREEN_LINE": ("#9db39f", "#3f5e47"),
     "TRACK":    ("#f1efee", "#2b2826"),
     "CHIP_TXT": ("#5f5955", "#c9c2bd"),
+    "AMBER":    ("#8a5a00", "#e0b25a"),
+    "AMBER_BG": ("#fbf1dc", "#3a2f1a"),
 }
 (RED, RED_BG, GREEN, GREEN_BG, INK, MUTED, LINE, SURFACE, BORDER, FAINT, GREEN_LINE, TRACK,
- CHIP_TXT) = (v[DARK] for v in PALETTE.values())
+ CHIP_TXT, AMBER, AMBER_BG) = (v[DARK] for v in PALETTE.values())
 
 st.markdown(f"""<style>
 section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {{ height: 2.25rem; padding: .5rem 1rem 0; }}
@@ -84,6 +86,7 @@ section[data-testid="stSidebar"] .st-key-testmode [data-testid="stAlert"] p {{ f
 .band .chip {{ font-size:.75rem; padding:.1rem .5rem; border-radius:4px; margin-left:.4rem; vertical-align:middle; font-weight:500; }}
 .band .chip.ok {{ background:{GREEN_BG}; color:{GREEN}; }}
 .band .chip.over {{ background:{RED_BG}; color:{RED}; }}
+.band .chip.warn {{ background:{AMBER_BG}; color:{AMBER}; }}
 .band .chip.run {{ background:{TRACK}; color:{CHIP_TXT}; }}
 .band .track {{ position:relative; height:8px; background:{TRACK}; border-radius:4px; margin-top:1rem; }}
 .band .fill {{ position:absolute; left:0; top:0; bottom:0; background:{RED}; border-radius:4px; }}
@@ -227,13 +230,19 @@ with st.sidebar:
                                     help="Day 0: the day the meat is trimmed, spiced and bagged")
             weight = st.number_input("Meat weight [g]", min_value=1.0, value=2000.0, step=1.0, format="%.0f",
                                      help="Raw meat after trimming")
+            salt = st.radio("Curing salt", ["With EcoCure #2", "Without curing salt"], index=None,
+                            help="No default on purpose: decide for each batch. Without curing salt, protection "
+                                 "rests on the salt level and on drying properly.")
             if st.form_submit_button("Create project", type="primary"):
                 if not name.strip():
                     st.error("Give the project a name")
+                elif salt is None:
+                    st.error("Choose whether this batch uses curing salt")
                 else:
                     try:
                         with con:
-                            new = db.create_project(con, name.strip(), next(iter(BLENDS)), False, weight, start_d)
+                            new = db.create_project(con, name.strip(), next(iter(BLENDS)),
+                                                    salt == "With EcoCure #2", weight, start_d)
                         st.session_state["pid_next"] = new
                         st.session_state[f"step{new}"] = "day0"
                         st.rerun()
@@ -298,6 +307,8 @@ facts = [p["blend"], f"{p['green_weight_g']:.0f} g raw meat after trimming",
 if closed:
     facts.append(f"closed {d(p['closed_at'][:10]):%d %b %Y}")
 st.caption(",  ".join(facts))
+if not p["ecocure"]:
+    st.warning(safety.NO_CURE_WARNING, icon=":material/warning:")
 
 # --------------------------------------------------------------------------- #
 # journey rail
@@ -729,10 +740,14 @@ def step_cure():
     run_to = end_act or today
     actual_days = (run_to - start).days if start <= run_to else 0
     diff = actual_days - days
+    length = safety.cure_length(actual_days, mins, days) if end_act else None
     if end_act:
         act_val, act_sub = f"{end_act:%d %b %Y}", "out of the bag"
-        chip = (f'<span class="chip {"over" if diff > 0 else "ok"}">{diff:+d} vs plan</span>'
-                if diff else '<span class="chip ok">as planned</span>')
+        # longer is safe with equilibrium curing (green); short of the +20 % margin amber; below minimum red
+        cls = {"ok": "ok", "short": "warn", "below_min": "over"}[length]
+        label = "as planned" if diff == 0 else (f"{diff:+d} vs plan" if length != "below_min" else "below minimum")
+        chip = f'<span class="chip {cls}">{label}</span>'
+
     else:
         left = (planned - today).days
         act_val, act_sub = "Still curing", (f"{left} days to go" if left > 0 else
@@ -754,17 +769,32 @@ def step_cure():
           ("Calculator minimum", f"{mins:.1f} days", "before the 20 % margin"),
           ("Planned days", f"{days} days", "minimum + 20 %, rounded up"),
           ("Actual days", f"{actual_days} days{chip}",
-           "longer is safe with equilibrium curing" if diff > 0 else "")], extra=timeline)
+           {"ok": "longer is safe with equilibrium curing" if diff > 0 else "",
+            "short": "past the calculator minimum, but not the +20 % margin",
+            "below_min": "shorter than the calculator minimum: salt may not have reached the centre",
+            None: ""}[length])], extra=timeline)
+    if length == "below_min":
+        st.error(f"This cure ({actual_days} days) is shorter than the calculator minimum ({mins:.1f} days). "
+                 "The salt may not have reached the centre of the piece.")
+    elif length == "short":
+        st.warning(f"This cure ({actual_days} days) is past the calculator minimum ({mins:.1f} days) but "
+                   f"short of the planned {days} days, which include a 20 % safety margin.")
 
     blk("Unbag")
     with st.container(border=True):
-        c1, c2 = st.columns([1, 2], vertical_alignment="bottom")
+        c1, c3, c2 = st.columns([1, 1, 2], vertical_alignment="bottom")
         c1.date_input("Taken out of the bag", value=d(p["cure_end_actual"]), format="DD/MM/YYYY",
                       key=k + "end", disabled=c_locked, help="Leave empty while the meat is still curing")
+        fridge = c3.number_input("Cure fridge [°C]", value=p["cure_fridge_c"], min_value=-5.0, max_value=30.0,
+                                 step=0.5, format="%.1f", placeholder="optional", key=k + "fridge",
+                                 disabled=c_locked, help="Temperature of the fridge the bag cures in. "
+                                 "The cure time assumes 1-3 °C.")
         c2.caption(f"Piece: {shape}, {thick:g} cm{' (estimate)' if p['thickness_estimated'] else ''}. "
                    "Change it on day 0.")
         if end_act and end_act < start:
             st.error("'Taken out of the bag' is before 'Into the bag'. Check the date.")
+        if w_ := safety.cure_fridge_warning(fridge):
+            st.warning(w_)
 
     note = journal("cure", p["cure_note"], db.set_cure_note,
                    "Method and exceptions, e.g. flipped daily; missed a flip on day 12")
@@ -773,20 +803,28 @@ def step_cure():
         db.set_cure(con_, pid_, shape=shape, thickness_cm=thick, length_cm=p["length_cm"],
                     thickness_estimated=bool(p["thickness_estimated"]), start=start, end_actual=end_act,
                     method=None, note=note.strip() or None)
+        db.set_cure_fridge(con_, pid_, fridge)
+
+    confirm_short = False
 
     def save_and_lock(con_, pid_):
         save_cure(con_, pid_)
-        db.lock_cure(con_, pid_)
+        db.lock_cure(con_, pid_, confirm_short=confirm_short)
 
     blk("Done")
     if not closed:
         if not p["cure_locked_at"]:
+            if length == "below_min":
+                confirm_short = st.checkbox("I know this cure is shorter than the calculator minimum and want to "
+                                            "lock it anyway (recorded in the history and the PDF)",
+                                            key=f"short_ok{pid}")
             b1, b2, _ = st.columns([1.2, 2.2, 3])
-            if b1.button("Save", key=f"save_cure{pid}", width="stretch",
-                         disabled=(end_act.isoformat() if end_act else None) == p["cure_end_actual"]):
+            unchanged = ((end_act.isoformat() if end_act else None) == p["cure_end_actual"]
+                         and fridge == p["cure_fridge_c"])
+            if b1.button("Save", key=f"save_cure{pid}", width="stretch", disabled=unchanged):
                 act(save_cure, pid, success="Cure saved")
             if b2.button("Done: lock cure and start drying", type="primary", key=f"done_cure{pid}",
-                         width="stretch", disabled=not end_act,
+                         width="stretch", disabled=not end_act or (length == "below_min" and not confirm_short),
                          help=None if end_act else "Enter the date it came out of the bag first"):
                 act(save_and_lock, pid, success="Cure locked. Next: wrap, net and weigh.", goto="dry")
         else:
@@ -829,7 +867,10 @@ def step_dry_start():
         sg = c2.number_input("Start weight incl. wrap + net [g]", min_value=1.0, value=None,
                              step=1.0, format="%.0f", placeholder="weigh it now",
                              help="Weigh the piece after wrapping and netting, before hanging it")
-        tp = c3.number_input("Target loss [%]", min_value=1.0, max_value=70.0, value=35.0, step=1.0)
+        tp = c3.number_input("Target loss [%]", min_value=safety.TARGET_MIN, max_value=safety.TARGET_MAX,
+                             value=35.0, step=1.0,
+                             help=f"Allowed {safety.TARGET_MIN:g}-{safety.TARGET_MAX:g} %, usual "
+                                  f"{safety.TARGET_USUAL[0]:g}-{safety.TARGET_USUAL[1]:g} %. " "Measured on the meat at the start of drying: start weight minus packaging.")
         names = [c["name"] for c in db.chambers(con)]
         c4, c5 = st.columns(2)
         ch_name = c4.selectbox("Drying chamber", names + ["+ New chamber"]) if names else "+ New chamber"
@@ -854,16 +895,16 @@ def step_dry_start():
 
 
 def climate_cell(m, i: int) -> str:
-    """Day average for the table; * = partial day (sensor reported for less than half the day)."""
+    """Day average for the table; * = partial day (sensor reported for less than half the day);
+    ⚠ = outside the safe drying range (see bresaola/safety.py)."""
     if not m or m[i] is None:
         return "–"
-    return (f"{m[i]:.1f}" if i == 0 else f"{m[i]:.0f}") + ("*" if m[3] else "")
+    flag = " ⚠" if safety.out_of_range("t" if i == 0 else "h", m[i]) else ""
+    return (f"{m[i]:.1f}" if i == 0 else f"{m[i]:.0f}") + ("*" if m[3] else "") + flag
 
 
 def period_cell(m, i: int) -> str:
-    if not m or m[i] is None:
-        return "–"
-    return (f"{m[i]:.1f}" if i == 0 else f"{m[i]:.0f}") + ("*" if m[3] else "")
+    return climate_cell(m, i)            # same layout: (temp, rh, readings, partial, ...)
 
 
 def weigh_in_periods() -> dict:
@@ -951,6 +992,8 @@ def chamber_section():
                 bits.append(f"temperature {min(temps):.1f} to {max(temps):.1f} °C, average {sum(temps)/len(temps):.1f}")
             if rhs:
                 bits.append(f"humidity {min(rhs):.0f} to {max(rhs):.0f} %, average {sum(rhs)/len(rhs):.0f}")
+            for n_ in safety.chamber_warnings(cr)[1]:
+                st.info(n_, icon=":material/ac_unit:")
             st.caption(f"{len(cr)} readings since drying started: {'; '.join(bits)}. Last reading {fmt_date(cr[-1]['ts'][:10])} "
                        f"{cr[-1]['ts'][11:16]}.")
         if closed:
@@ -1090,8 +1133,13 @@ def step_dry():
     blk("Where it stands")
     m = st.columns(5)
     m[0].metric("Latest weight", f"{s['latest_gross_g']:.0f} g", help=f"on {s['latest_day']:%d %b %Y}")
-    m[1].metric("Target weight", f"{s['target_gross_g']:.0f} g", help=f"{p['target_loss_pct']:g} % loss on meat")
-    m[2].metric("Weight lost", f"{s['loss_pct']:.1f} %")
+    m[1].metric("Target weight", f"{s['target_gross_g']:.0f} g",
+                help=f"{p['target_loss_pct']:g} % loss on the meat at the start of drying, plus packaging")
+    m[2].metric("Weight lost", f"{s['loss_pct']:.1f} %",
+                help="Of the meat at the start of drying (start weight minus packaging). Stricter than measuring "
+                     "from the raw weight, because the meat already loses some weight in the bag.")
+    if w_ := safety.target_warning(float(p["target_loss_pct"])):
+        st.warning(w_)
     m[3].metric("Progress to target", f"{min(s['progress'], 1)*100:.0f} %")
     if s["progress"] >= 1:
         eta_txt, eta_help = "Reached", "The latest weigh-in is at or below the target weight."
@@ -1139,8 +1187,13 @@ def step_dry():
         "Data [%]": st.column_config.TextColumn(help="Share of hours since the previous weigh-in with "
                                                 "sensor readings. Under 50 % the averages get a *.")})
     st.caption("Day: average on the weigh-in day. Since last: average since the previous weigh-in, the "
-           "conditions behind that weight loss. * less than half the time covered by sensor data; – none.")
+               "conditions behind that weight loss. * less than half the time covered by sensor data; – none; "
+               f"⚠ outside the safe drying range (above {safety.DRY_TEMP_MAX:g} °C, humidity outside "
+               f"{safety.RH_MIN:g}-{safety.RH_MAX:g} %).")
     if p["chamber_id"]:
+        cr_dry = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"])
+        for w_ in safety.chamber_warnings(cr_dry)[0]:
+            st.warning(w_, icon=":material/thermostat:")
         chamber_section()
     if not d_locked and len(rows) > 1:
         with st.expander("Delete a weigh-in"):
@@ -1171,8 +1224,16 @@ def step_dry():
                     tare_estimated=ee, success="Drying start updated")
         st.divider()
         c1, c2, c3 = st.columns([1, 2, 1], vertical_alignment="bottom")
-        nt = c1.number_input("Target loss [%]", min_value=1.0, max_value=70.0, disabled=d_locked,
-                             value=float(p["target_loss_pct"]), step=0.5, key=f"tgt{pid}")
+        stored = float(p["target_loss_pct"])
+        if safety.target_problem(stored):          # set before v0.4.0, when 1-70 % was allowed
+            st.error(f"The current target ({stored:g} %) is outside the allowed "
+                     f"{safety.TARGET_MIN:g}-{safety.TARGET_MAX:g} %. Set a new one.")
+        nt = c1.number_input("Target loss [%]", min_value=safety.TARGET_MIN, max_value=safety.TARGET_MAX,
+                             disabled=d_locked, step=0.5, key=f"tgt{pid}",
+                             value=min(max(stored, safety.TARGET_MIN), safety.TARGET_MAX),
+                             help=f"Allowed {safety.TARGET_MIN:g}-{safety.TARGET_MAX:g} %. " "Measured on the meat at the start of drying: start weight minus packaging.")
+        if w_ := safety.target_warning(nt):
+            st.warning(w_)
         why = c2.text_input("Reason for change", key=f"why{pid}", disabled=d_locked)
         if c3.button("Change target", disabled=d_locked or nt == p["target_loss_pct"], width="stretch"):
             act(db.change_target, pid, nt, why, success="Target changed")

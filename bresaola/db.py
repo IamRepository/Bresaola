@@ -149,7 +149,7 @@ def _iso(d) -> str | None:
 # columns added after v0.2.0; older databases (and backups) get them on open
 MIGRATIONS = {"project": [("start_date", "TEXT"), ("spice_note", "TEXT"),
                           ("cure_locked_at", "TEXT"), ("dry_locked_at", "TEXT"),
-                          ("equalise_locked_at", "TEXT")],
+                          ("equalise_locked_at", "TEXT"), ("cure_fridge_c", "REAL")],
               "photo": [("stage", "TEXT")]}
 
 
@@ -300,6 +300,8 @@ def update_spice_inputs(con, pid: int, green_weight_g: float | None = None,
     w = p["green_weight_g"] if green_weight_g is None else green_weight_g
     e = bool(p["ecocure"]) if ecocure is None else ecocure
     rates = _stored_rates(con, pid)
+    if e != bool(p["ecocure"]):
+        log(con, pid, "curing_salt_changed", "with EcoCure #2" if e else "without curing salt")
     con.execute("UPDATE project SET green_weight_g=?, ecocure=? WHERE id=?", (w, int(e), pid))
     _write_plan(con, pid, w, e, rates)
 
@@ -401,20 +403,43 @@ def set_cure(con, pid: int, *, shape: str, thickness_cm: float, start, length_cm
                  _iso(start), planned.isoformat(), _iso(end_actual), note, pid))
 
 
+def set_cure_fridge(con, pid: int, temp_c: float | None) -> None:
+    """Temperature of the fridge the bag cures in; optional, editable until the cure is locked."""
+    _require_unlocked(con, pid, "cure")
+    if temp_c is not None and not -5 <= temp_c <= 30:
+        raise ValueError("The cure fridge temperature must be between -5 and 30 °C")
+    con.execute("UPDATE project SET cure_fridge_c=? WHERE id=?", (temp_c, pid))
+
+
 def set_cure_note(con, pid: int, note: str | None) -> None:
     """Notes stay editable after the cure is locked."""
     _require_open(con, pid)
     con.execute("UPDATE project SET cure_note=? WHERE id=?", (note or None, pid))
 
 
-def lock_cure(con, pid: int) -> None:
+def cure_length(p) -> str | None:
+    """'ok' / 'short' / 'below_min' for a project with bag and out-of-bag dates, else None."""
+    if not (p["cure_start"] and p["cure_end_actual"] and p["thickness_cm"]):
+        return None
+    from . import safety
+    actual = (date.fromisoformat(p["cure_end_actual"]) - date.fromisoformat(p["cure_start"])).days
+    return safety.cure_length(actual, calc.cure_days_minimum(p["thickness_cm"], p["shape"]),
+                              calc.cure_days(p["thickness_cm"], p["shape"]))
+
+
+def lock_cure(con, pid: int, confirm_short: bool = False) -> None:
+    """A cure shorter than the calculator minimum only locks with confirm_short=True, and that is logged."""
     p = project(con, pid)
     if not p["spice_locked_at"]:
         raise Locked("Lock day 0 first")
     if not p["cure_end_actual"]:
         raise ValueError("Enter the date the meat came out of the bag before locking")
+    length = cure_length(p)
+    if length == "below_min" and not confirm_short:
+        raise ValueError("The cure is shorter than the calculator minimum: the salt may not have reached the "
+                         "centre. Confirm that you want to lock it anyway.")
     con.execute("UPDATE project SET cure_locked_at=? WHERE id=?", (_now(), pid))
-    log(con, pid, "cure_locked")
+    log(con, pid, "cure_locked", "below calculator minimum, confirmed" if length == "below_min" else "")
 
 
 def unlock_cure(con, pid: int, reason: str) -> None:
@@ -469,6 +494,7 @@ def set_drying(con, pid: int, *, start, start_gross_g: float, chamber_id: int | 
                tare_g: float = 0.0, tare_estimated: bool = True,
                target_loss_pct: float = 35.0, note=None) -> None:
     _require_unlocked(con, pid, "dry")
+    _check_target(target_loss_pct)
     _check_dry_start(con, pid, start, start_gross_g, tare_g)
     con.execute("""UPDATE project SET dry_start=?, dry_start_gross_g=?, chamber_id=?, tare_g=?,
                    tare_estimated=?, target_loss_pct=?, dry_note=? WHERE id=?""",
@@ -512,8 +538,15 @@ def update_drying_start(con, pid: int, *, start, start_gross_g: float, tare_g: f
         f"packaging {tare_g:g} g")
 
 
+def _check_target(pct: float) -> None:
+    from . import safety
+    if msg := safety.target_problem(pct):
+        raise ValueError(msg)
+
+
 def change_target(con, pid: int, new_pct: float, reason: str = "") -> None:
     _require_unlocked(con, pid, "dry")
+    _check_target(new_pct)
     old = project(con, pid)["target_loss_pct"]
     con.execute("UPDATE project SET target_loss_pct=? WHERE id=?", (new_pct, pid))
     log(con, pid, "target_changed", f"{old} % -> {new_pct} % {reason}".strip())
