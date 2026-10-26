@@ -1,8 +1,8 @@
 # Running Bresaola Tracker on the Synology NAS
 
-Target: Synology DS1019+, DSM 7.4, Container Manager. Same layout as the BBQ dashboard
-(`docker/<app>/data`, Tailscale for remote access). The NAS copy is the real one: its data stays on
-the NAS. Streamlit Community Cloud keeps running from `main` for trying new versions; it keeps
+Target: Synology DS1019+, DSM 7.4, Container Manager; app in `docker/bresaola`, data in
+`docker/bresaola/data`; remote access through VPN Plus on the Synology router. The NAS copy is the real
+one: its data stays on the NAS. Streamlit Community Cloud keeps running from `main` for trying new versions; it keeps
 nothing, and the two do not share data.
 
 ## 1. Put the app on the NAS
