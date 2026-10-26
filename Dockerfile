@@ -17,6 +17,6 @@ COPY . .
 VOLUME /data
 EXPOSE 8501
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"
+  CMD python -c "import os, urllib.request; urllib.request.urlopen('http://localhost:%s/_stcore/health' % os.environ.get('PORT', '8501'))"
 CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0", \
      "--server.headless=true", "--browser.gatherUsageStats=false"]

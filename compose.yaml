@@ -4,8 +4,11 @@ services:
     build: .
     image: bresaola-tracker
     container_name: bresaola
-    ports:
-      - "8503:8501"          # 8501 (BBQ dashboard) and 8502 are taken on the NAS; open http://<nas>:8503
+    # Host networking: the app listens straight on the NAS's own address (no Docker port forwarding,
+    # which did not work on this Synology). Open http://<NAS IP>:8503
+    network_mode: host
+    command: ["streamlit", "run", "app.py", "--server.port=8503", "--server.address=0.0.0.0",
+              "--server.headless=true", "--browser.gatherUsageStats=false"]
     volumes:
       - ./data:/data         # database + photos live here, outside the container
     environment:
@@ -13,6 +16,7 @@ services:
       BRESAOLA_DATA: /data
       BRESAOLA_TZ: Europe/Berlin
       TZ: Europe/Berlin
+      PORT: "8503"           # same as --server.port above; used by the health check
       # Tapo hub sync (optional): fill in, then the Dry step shows "Sync last 24 h from hub"
       # TAPO_USERNAME: you@example.com
       # TAPO_PASSWORD: your-tapo-password
