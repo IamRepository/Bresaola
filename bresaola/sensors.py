@@ -16,7 +16,7 @@ import io
 import re
 from dataclasses import dataclass, field
 from bisect import bisect_left
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 from . import db
 
@@ -160,7 +160,6 @@ def parse_export(data: bytes, filename: str) -> Parsed:
     samples = [str(cell(r, ti) or "") for r in body[:200]]
     dayfirst = _dayfirst(samples)
     out = Parsed(fahrenheit=fahrenheit, columns=(header[ti], cell(header, ci), cell(header, hi)))
-    seen = set()
     for r in body:
         tv = cell(r, ti)
         if ti2 is not None:
@@ -173,14 +172,43 @@ def parse_export(data: bytes, filename: str) -> Parsed:
             continue
         if fahrenheit and temp is not None:
             temp = (temp - 32) * 5 / 9
-        if t in seen:
-            continue
-        seen.add(t)
         out.rows.append((t, round(temp, 2) if temp is not None else None, rh))
-    out.rows.sort(key=lambda x: x[0])
+    out.rows = merge_same_time(out.rows)
     if not out.rows:
         raise ValueError("The file has the right columns but no readings could be read from it.")
     return out
+
+
+def merge_same_time(rows):
+    """Readings are stored in local wall-clock time. When the clocks go back (last Sunday of October)
+    02:00-02:59 happens twice, so two readings share one local time: average them instead of letting
+    one silently replace the other (audit 26 Oct, #2). Also sorts by time."""
+    by_t: dict[datetime, list] = {}
+    for t, temp, rh in rows:
+        by_t.setdefault(t, []).append((temp, rh))
+    out = []
+    for t in sorted(by_t):
+        v = by_t[t]
+        if len(v) == 1:
+            out.append((t, *v[0]))
+            continue
+        temps = [x[0] for x in v if x[0] is not None]
+        rhs = [x[1] for x in v if x[1] is not None]
+        out.append((t, round(sum(temps) / len(temps), 2) if temps else None,
+                    round(sum(rhs) / len(rhs), 1) if rhs else None))
+    return out
+
+
+def wall_hours(a: datetime, b: datetime) -> int:
+    """Clock hours that exist between local times a and b. The hour skipped in March doesn't count,
+    and the repeated October hour counts once (its readings are merged), so a full period is 100 %."""
+    n, t = 0, a
+    while t < b:
+        aware = t.replace(tzinfo=db.TZ)
+        if aware.astimezone(timezone.utc).astimezone(db.TZ).replace(tzinfo=None) == t:
+            n += 1
+        t += timedelta(hours=1)
+    return n
 
 
 def leave_out(rows, start: datetime | None, end: datetime | None):
@@ -202,6 +230,18 @@ def import_readings(con, chamber_id: int, rows, source: str) -> tuple[int, int]:
         except ValueError:
             rejected += 1
     return stored, rejected
+
+
+def import_export(con, chamber_id: int, rows, lo: datetime | None = None, hi: datetime | None = None):
+    """Import a Tapo export. With a leave-out period (lo..hi, inclusive), sensor readings already stored
+    for that period are removed too: the sensor was out of the chamber, whichever way they arrived
+    (audit 26 Oct, #9). Readings inside locked drying periods are kept. Returns (stored, rejected, removed)."""
+    removed = 0
+    if lo and hi:
+        for src in db.SENSOR_SOURCES:
+            removed += db.delete_chamber_readings(con, chamber_id, src, lo, hi)[0]
+    stored, rejected = import_readings(con, chamber_id, leave_out(rows, lo, hi)[0], "tapo_export")
+    return stored, rejected, removed
 
 
 WEIGH_IN_TIME = time(12, 0)          # weigh-ins have a date only; shown at noon on the charts
@@ -254,7 +294,7 @@ def period_averages(days: list[date], chamber_rows) -> dict[date, tuple[float | 
             continue
         temps = [x[1] for x in v if x[1] is not None]
         rhs = [x[2] for x in v if x[2] is not None]
-        hours_total = max((b - a).total_seconds() / 3600, 1)
+        hours_total = max(wall_hours(a, b), 1)
         covered = len({(x[0].date(), x[0].hour) for x in v}) / hours_total
         out[cur] = (round(sum(temps) / len(temps), 1) if temps else None,
                     round(sum(rhs) / len(rhs), 0) if rhs else None,

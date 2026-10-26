@@ -60,7 +60,7 @@ def records_to_rows(recs) -> list[tuple[datetime, float | None, float | None]]:
             temp = (temp - 32) * 5 / 9
         rh = float(r.humidity) if r.humidity is not None else None
         rows.append((to_local(r.recorded_at), round(temp, 2) if temp is not None else None, rh))
-    return rows
+    return sensors.merge_same_time(rows)          # the repeated October hour: average, don't overwrite
 
 
 async def fetch(nicknames: list[str], client_factory=None) -> dict[str, list]:

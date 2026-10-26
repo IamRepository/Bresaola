@@ -1,3 +1,3 @@
 # Extra packages for running on your own PC or NAS (not needed on Streamlit Cloud)
 -r requirements.txt
-tapo>=0.8          # read the Tapo T310/T315 straight from the H100 hub (Python 3.11+)
+tapo>=0.11,<0.13   # read the Tapo T310/T315 from the H100 hub (Python 3.11+); 0.11+ has recorded_at; 0.12.0 checked

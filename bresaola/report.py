@@ -345,7 +345,8 @@ def build_pdf(con, pid: int) -> bytes:
         def cell(m, i, unit=""):
             if not m or m[i] is None:
                 return "–"
-            return (f"{m[i]:.1f}" if i == 0 else f"{m[i]:.0f}") + unit + ("*" if m[3] else "")
+            flag = " ⚠" if safety.out_of_range("t" if i == 0 else "h", m[i], kind or "fridge") else ""
+            return (f"{m[i]:.1f}" if i == 0 else f"{m[i]:.0f}") + unit + ("*" if m[3] else "") + flag
         wr = [["Date", "Day", "Weight", "Lost", "Day °C", "Day RH", "Since °C", "Since RH", "Data", "Note"]]
         for r in rrows:
             day = _d(r["day"])
@@ -362,7 +363,9 @@ def build_pdf(con, pid: int) -> bytes:
             story.append(Paragraph("Day: average of all chamber readings on the weigh-in day. Since: average since "
                                    "the previous weigh-in (12:00 to 12:00), the conditions behind that weight loss; "
                                    "Data = share of those hours with sensor readings. * less than half the time "
-                                   "covered; – no readings.", S["small"]))
+                                   "covered; – no readings; ⚠ outside the safe range for a "
+                                   f"{safety.KINDS[kind or 'fridge'].lower()} (above {safety.TEMP_MAX[kind or 'fridge']:g} °C, "
+                                   f"humidity outside {safety.RH_MIN:g}-{safety.RH_MAX:g} %).", S["small"]))
         if p["chamber_id"]:
             cr = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"] or today.isoformat())
             temps = [r["temp_c"] for r in cr if r["temp_c"] is not None]
@@ -382,7 +385,7 @@ def build_pdf(con, pid: int) -> bytes:
                 story.append(_alert(w))
             for n in notes_:
                 story.append(Paragraph(_text(n), S["small"]))
-        if w := safety.target_warning(float(p["target_loss_pct"])):
+        if w := safety.target_message(float(p["target_loss_pct"]), hint=False):
             story.append(Spacer(1, 3))
             story.append(_alert(w))
 

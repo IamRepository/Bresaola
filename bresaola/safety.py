@@ -65,6 +65,14 @@ def target_warning(pct: float) -> str | None:
     return None
 
 
+def target_message(pct: float, hint: bool = True) -> str | None:
+    """One message for a stored target: outside the allowed range (set before v0.4.0) wins over 'unusual'."""
+    if not TARGET_MIN <= pct <= TARGET_MAX:
+        return (f"The target ({pct:g} %) is outside the allowed {TARGET_MIN:g}-{TARGET_MAX:g} % "
+                "(it was set before v0.4.0)." + (" Set a new one under \"Drying start, packaging and target\"." if hint else ""))
+    return target_warning(pct)
+
+
 def cure_length(actual_days: int, minimum_days: float, planned_days: int) -> str:
     """'ok' (reached the planned days), 'short' (past the calculator minimum but not the +20 % margin)
     or 'below_min' (shorter than the calculator minimum: salt may not have reached the centre)."""

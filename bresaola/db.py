@@ -255,6 +255,15 @@ _OUTSIDE_LOCKED = """NOT EXISTS (SELECT 1 FROM project p WHERE p.chamber_id = ch
                        AND chamber_reading.ts >= p.dry_start AND chamber_reading.ts <= p.dry_end || 'T23:59:59')"""
 
 
+SENSOR_SOURCES = ("tapo_export", "tapo_api")       # readings from the sensor (not typed in with weigh-ins)
+
+
+def sensor_readings_between(con, chamber_id: int, start, end) -> int:
+    """How many sensor readings are already stored from start to end (inclusive)."""
+    return con.execute(f"""SELECT COUNT(*) FROM chamber_reading WHERE chamber_id=? AND ts >= ? AND ts <= ?
+                           AND source IN {SENSOR_SOURCES}""", (chamber_id, _iso(start), _iso(end))).fetchone()[0]
+
+
 def delete_chamber_readings(con, chamber_id: int, source: str, start=None, end=None) -> tuple[int, int]:
     """Remove readings of one source (optionally only between start and end, inclusive).
     Readings inside a locked drying period are kept, so finished batches and their PDFs don't change.
@@ -305,6 +314,8 @@ def create_project(con, name: str, blend: str, ecocure: bool, green_weight_g: fl
     if not name:
         raise ValueError("Give the project a name")
     _check_name_free(con, name)
+    if start_date and date.fromisoformat(_iso(start_date)) > today():
+        raise ValueError("The start date is in the future. Day 0 is the day the meat was spiced and bagged.")
     rates = calc.blend_rates(blend)
     pid = con.execute("""INSERT INTO project (name, created_at, start_date, blend, ecocure, green_weight_g)
                          VALUES (?,?,?,?,?,?)""",
@@ -354,11 +365,19 @@ def actuals_edited(con, pid: int) -> bool:
     return False
 
 
-def set_actual(con, pid: int, position: int, actual: float | None, note: str | None = None) -> None:
+KEEP = object()          # set_actual: leave the note as it is
+
+
+def set_actual(con, pid: int, position: int, actual: float | None, note=KEEP) -> None:
+    """note: text, None/'' to clear it, or KEEP (default) to leave it unchanged (audit 26 Oct, #8)."""
     if project(con, pid)["spice_locked_at"]:
         raise Locked("Spice mix is locked; unlock it first")
-    con.execute("""UPDATE ingredient_line SET actual=?, note=COALESCE(?, note)
-                   WHERE project_id=? AND position=?""", (actual, note, pid, position))
+    if note is KEEP:
+        con.execute("UPDATE ingredient_line SET actual=? WHERE project_id=? AND position=?",
+                    (actual, pid, position))
+    else:
+        con.execute("UPDATE ingredient_line SET actual=?, note=? WHERE project_id=? AND position=?",
+                    (actual, (note or "").strip() or None, pid, position))
 
 
 def set_spice_note(con, pid: int, note: str | None) -> None:
@@ -376,6 +395,8 @@ def set_start_date(con, pid: int, day) -> None:
     old = p["start_date"]
     if old == new.isoformat():
         return
+    if new > today():
+        raise ValueError("The start date is in the future")
     if p["cure_start"]:
         bag = date.fromisoformat(p["cure_start"])
         follows = p["cure_start"] == old and not p["spice_locked_at"] and not p["cure_locked_at"]
@@ -767,13 +788,26 @@ def chambers(con) -> list[sqlite3.Row]:
     return con.execute("SELECT * FROM chamber ORDER BY name").fetchall()
 
 
+SOURCE_RANK = {"tapo_export": 0, "tapo_api": 1, "manual": 2}   # one reading per time: the first wins
+
+
 def chamber_readings(con, chamber_id: int, start=None, end=None) -> list[sqlite3.Row]:
+    """One reading per time. The same 15 minutes can arrive from the Tapo export and the hub sync;
+    both are stored (each source can be removed on its own), but counted once (audit 26 Oct, #10)."""
     q, args = "SELECT * FROM chamber_reading WHERE chamber_id=?", [chamber_id]
     if start:
         q += " AND ts >= ?"; args.append(_iso(start))
     if end:
         q += " AND ts <= ?"; args.append(_iso(end) + "T23:59:59")
-    return con.execute(q + " ORDER BY ts", args).fetchall()
+    rows = con.execute(q + " ORDER BY ts", args).fetchall()
+    out = []
+    for r in rows:
+        if out and out[-1]["ts"] == r["ts"]:
+            if SOURCE_RANK.get(r["source"], 9) < SOURCE_RANK.get(out[-1]["source"], 9):
+                out[-1] = r
+            continue
+        out.append(r)
+    return out
 
 
 def projects(con) -> list[sqlite3.Row]:

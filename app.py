@@ -203,6 +203,7 @@ with st.sidebar:
                 act(db.rename_project, pid, new_name, success="Renamed")
             st.markdown('<hr class="pop-sep"><p class="pop-h">Start date (day 0)</p>', unsafe_allow_html=True)
             new_start = st.date_input("Day 0 date", value=d(sp["start_date"]), format="DD/MM/YYYY",
+                                      max_value=max(db.today(), d(sp["start_date"])),
                                       key=f"sd{pid}", label_visibility="collapsed",
                                       disabled=sp["status"] == "closed")
             st.caption("The day the meat was trimmed, spiced and bagged. Also the date in the project name.")
@@ -226,7 +227,7 @@ with st.sidebar:
     with st.expander("New project", expanded=not projs):
         with st.form("new_project", clear_on_submit=True):
             name = st.text_input("Name", placeholder="Valtellina Nov 2026")
-            start_d = st.date_input("Start date", value=db.today(), format="DD/MM/YYYY",
+            start_d = st.date_input("Start date", value=db.today(), max_value=db.today(), format="DD/MM/YYYY",
                                     help="Day 0: the day the meat is trimmed, spiced and bagged")
             weight = st.number_input("Meat weight [g]", min_value=1.0, value=2000.0, step=1.0, format="%.0f",
                                      help="Raw meat after trimming")
@@ -632,7 +633,9 @@ def step_day0():
             continue
         for l, (_, r) in zip(rows, ed.iterrows()):
             a = r[f"Actual [{u}]"]
-            acts.append((l, None if pd.isna(a) else float(a), r["Note"] or None))
+            n_ = r["Note"]
+            n_ = None if n_ is None or (isinstance(n_, float) and pd.isna(n_)) else (str(n_).strip() or None)
+            acts.append((l, None if pd.isna(a) else float(a), n_))
     weight = p["green_weight_g"]
     plan_g = sum(l["planned"] for l in weighed)
     act_g = sum(a or 0 for l, a, _ in acts if l["unit"] == "pct")
@@ -1058,8 +1061,13 @@ def chamber_section():
                     st.error("'To' is before 'From'.")
                     lo = hi = None
                 parsed.rows, left_out = sensors.leave_out(parsed.rows, lo, hi)
-                if left_out:
-                    st.caption(f"Leaving out {left_out} readings from {lo:%d %b %H:%M} to {hi:%d %b %H:%M}.")
+                # readings already stored for that period are just as wrong: removed on import (audit #9)
+                stored_in_gap = db.sensor_readings_between(con, ch["id"], lo, hi) if lo and hi else 0
+                if left_out or stored_in_gap:
+                    st.caption(f"Leaving out {left_out} readings from {lo:%d %b %H:%M} to {hi:%d %b %H:%M}"
+                               + (f", and removing {stored_in_gap} already stored for that period "
+                                  "(Tapo import and hub sync; periods with locked drying are kept)"
+                                  if stored_in_gap else "") + ".")
                 if not parsed.rows:
                     st.warning("Nothing left to import.")
                     return
@@ -1073,10 +1081,12 @@ def chamber_section():
                         + (f". {parsed.skipped} lines skipped." if parsed.skipped else "."))
                 if st.button(f"Import into {ch['name']}", type="primary", key=f"tapoimp{pid}"):
                     with con:
-                        stored, rejected = sensors.import_readings(con, ch["id"], parsed.rows, "tapo_export")
+                        stored, rejected, removed = sensors.import_export(con, ch["id"], parsed.rows, lo, hi)
                     st.session_state["tapo_n"] = st.session_state.get("tapo_n", 0) + 1      # empty the uploader
                     st.session_state["flash"] = (f"{stored} readings imported into {ch['name']}"
-                                                 + (f", {rejected} out of range skipped" if rejected else ""))
+                                                 + (f", {rejected} out of range skipped" if rejected else "")
+                                                 + (f", {removed} stored earlier for the left-out period removed"
+                                                    if removed else ""))
                     st.rerun()
         counts = db.chamber_reading_counts(con, ch["id"])
         if counts:
@@ -1177,7 +1187,7 @@ def step_dry():
     m[2].metric("Weight lost", f"{s['loss_pct']:.1f} %",
                 help="Of the meat at the start of drying (start weight minus packaging). Stricter than measuring "
                      "from the raw weight, because the meat already loses some weight in the bag.")
-    if w_ := safety.target_warning(float(p["target_loss_pct"])):
+    if w_ := safety.target_message(float(p["target_loss_pct"])):
         st.warning(w_)
     m[3].metric("Progress to target", f"{min(s['progress'], 1)*100:.0f} %")
     if s["progress"] >= 1:
@@ -1272,7 +1282,9 @@ def step_dry():
                              disabled=d_locked, step=0.5, key=f"tgt{pid}",
                              value=min(max(stored, safety.TARGET_MIN), safety.TARGET_MAX),
                              help=f"Allowed {safety.TARGET_MIN:g}-{safety.TARGET_MAX:g} %. " "Measured on the meat at the start of drying: start weight minus packaging.")
-        if w_ := safety.target_warning(nt):
+        # a stored out-of-range target shows its one error above; the clamped default adds no second message
+        if (w_ := safety.target_warning(nt)) and not (safety.target_problem(stored)
+                                                      and nt == min(max(stored, safety.TARGET_MIN), safety.TARGET_MAX)):
             st.warning(w_)
         why = c2.text_input("Reason for change", key=f"why{pid}", disabled=d_locked)
         if c3.button("Change target", disabled=d_locked or nt == p["target_loss_pct"], width="stretch"):
