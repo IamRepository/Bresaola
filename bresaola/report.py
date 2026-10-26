@@ -70,6 +70,23 @@ def _text(s: str | None) -> str:
     return escape(s or "").replace("\n", "<br/>")
 
 
+CELL_MAX = 300          # characters of user text in a table cell; the rest goes under Notes
+CELL_LINES = 6          # line breaks in a table cell
+
+
+def _cell_text(s: str | None, label: str, overflow: list) -> str:
+    """Table cells can't split across pages: a note longer than a page made reportlab give up
+    (LayoutError) and the download did nothing (audit 26 Oct, #3). Shorten long cell text and keep
+    the full text for the Notes section."""
+    s = s or ""
+    if len(s) <= CELL_MAX and s.count("\n") < CELL_LINES:
+        return s
+    overflow.append((label, s))
+    short = " ".join(s[:CELL_MAX].split())                  # line breaks folded into spaces
+    short = short.rsplit(" ", 1)[0] if " " in short else short
+    return short + " … (full text under Notes)"
+
+
 def _table(rows, widths, header=True, align_right=()):
     data = [[c if isinstance(c, Paragraph) else Paragraph(_text(str(c)), S["cell"]) for c in r] for r in rows]
     t = Table(data, colWidths=widths, repeatRows=1 if header else 0)
@@ -167,13 +184,15 @@ def _chart(rs, start_day: date, target_g: float, width=BODY_W, height=62 * mm):
 PHOTO_STEP = {"spice": "Day 0", "cure": "Cure", "dry": "Drying", "equalise": "Equalise"}
 
 
-def _photo_grid(rows, cols=3):
+def _photo_grid(rows, cols=3, overflow=None):
+    overflow = [] if overflow is None else overflow
     cell_w = BODY_W / cols - 4
     cells, out = [], []
     for r in rows:
         f = storage.photo_file(r["path"])
         step = PHOTO_STEP.get(r["stage"], "Other")
-        cap = Paragraph(f"<b>{step}</b> · " + _text(_fd(r["taken_at"]) + (f", {r['caption']}" if r["caption"] else "")),
+        caption = _cell_text(r["caption"], f"Photo caption ({step}, {_fd(r['taken_at'])})", overflow)
+        cap = Paragraph(f"<b>{step}</b> · " + _text(_fd(r["taken_at"]) + (f", {caption}" if caption else "")),
                         S["small"])
         try:
             from PIL import Image as PImage
@@ -257,6 +276,8 @@ def build_pdf(con, pid: int) -> bytes:
         tl.append(["Closed", _fd(p["closed_at"]), ""])
     story.append(_table(tl, [60 * mm, 40 * mm, BODY_W - 100 * mm]))
 
+    overflow: list[tuple[str, str]] = []      # long cell texts, printed in full under Notes
+
     # --- recipe -------------------------------------------------------------------------- #
     story.append(Paragraph("Recipe: spice mix", S["h2"]))
     rows = [["Ingredient", "Rate", "Plan", "Actual", "Note"]]
@@ -265,7 +286,8 @@ def build_pdf(con, pid: int) -> bytes:
         rate = f"{l['rate'] * 100:.3g} %" if pct else f"{l['rate']:g} pcs/kg"
         fmt = (lambda v: f"{v:.1f} g") if pct else (lambda v: f"{v:.0f} pcs")
         rows.append([l["name"], rate, fmt(l["planned"]),
-                     fmt(l["actual"]) if l["actual"] is not None else "–", l["note"] or ""])
+                     fmt(l["actual"]) if l["actual"] is not None else "–",
+                     _cell_text(l["note"], f"Ingredient note: {l['name']}", overflow)])
     story.append(_table(_right(rows, (1, 2, 3)), [52 * mm, 22 * mm, 20 * mm, 20 * mm, BODY_W - 114 * mm]))
     plan_mix = calc.mix_summary([(l["name"], l["unit"], l["planned"]) for l in lines], p["green_weight_g"])
     act_mix = calc.mix_summary([(l["name"], l["unit"], l["actual"]) for l in lines], p["green_weight_g"])
@@ -331,7 +353,8 @@ def build_pdf(con, pid: int) -> bytes:
             wr.append([_fd(day), str((day - _d(p["dry_start"])).days), f"{r['gross_g']:.0f} g",
                        f"{calc.loss_pct(p['dry_start_gross_g'], r['gross_g'], tare):.1f} %",
                        cell(m, 0), cell(m, 1, " %"), cell(q, 0), cell(q, 1, " %"),
-                       f"{q[4] * 100:.0f} %" if q else "–", r["note"] or ""])
+                       f"{q[4] * 100:.0f} %" if q else "–",
+                       _cell_text(r["note"], f"Weigh-in note, {_fd(day)}", overflow)])
         story.append(_table(_right(wr, (1, 2, 3, 4, 5, 6, 7, 8)),
                             [22 * mm, 10 * mm, 17 * mm, 14 * mm, 14 * mm, 14 * mm, 15 * mm, 15 * mm, 12 * mm,
                              BODY_W - 133 * mm]))
@@ -364,22 +387,27 @@ def build_pdf(con, pid: int) -> bytes:
             story.append(_alert(w))
 
     # --- notes --------------------------------------------------------------------------- #
+    allp = db.photos(con, pid)
+    grid = None
+    if allp:                                   # built before Notes, so long captions can go there
+        order = {"spice": 0, "cure": 1, "dry": 2, "equalise": 3}
+        allp = sorted(allp, key=lambda r: (order.get(r["stage"], 9), r["taken_at"]))
+        grid = _photo_grid(allp, overflow=overflow)
     notes = [("Day 0", p["spice_note"]), ("Cure", p["cure_note"]), ("Drying", p["dry_note"]),
              ("Final notes", p["final_notes"])]
-    notes = [(k, v) for k, v in notes if v and v.strip()]
+    notes = [(k, v) for k, v in notes if v and v.strip()] + overflow
     if notes:
         story.append(Paragraph("Notes", S["h2"]))
         for k, v in notes:
-            story.append(KeepTogether([Paragraph(f"<b>{k}</b>", S["body"]), Paragraph(_text(v), S["body"]),
-                                       Spacer(1, 4)]))
+            # heading kept with the start of the note; the note itself may run over pages
+            story.append(Paragraph(f"<b>{_text(k)}</b>", ParagraphStyle("nh", parent=S["body"], keepWithNext=1)))
+            story += [Paragraph(_text(part), S["body"]) for part in v.split("\n\n")]
+            story.append(Spacer(1, 4))
 
     # --- photos -------------------------------------------------------------------------- #
-    allp = db.photos(con, pid)
-    if allp:
-        order = {"spice": 0, "cure": 1, "dry": 2, "equalise": 3}
-        allp = sorted(allp, key=lambda r: (order.get(r["stage"], 9), r["taken_at"]))
+    if grid is not None:
         story.append(Paragraph("Photos", S["h2"]))
-        story.append(_photo_grid(allp))
+        story.append(grid)
 
     # --- build --------------------------------------------------------------------------- #
     def footer(canvas, doc):

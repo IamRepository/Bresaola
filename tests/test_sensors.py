@@ -224,10 +224,10 @@ def test_remove_readings_by_source_and_period(con):
     with con:
         sensors.import_readings(con, 1, [(datetime(2026, 10, d, 12), 2.0, 80.0) for d in (1, 2, 3)], "tapo_export")
         db.add_chamber_reading(con, 1, "2026-10-02T12:00:00", 2.5, 81, source="manual")
-        assert db.delete_chamber_readings(con, 1, "tapo_export", datetime(2026, 10, 2), datetime(2026, 10, 2, 23, 59, 59)) == 1
+        assert db.delete_chamber_readings(con, 1, "tapo_export", datetime(2026, 10, 2), datetime(2026, 10, 2, 23, 59, 59)) == (1, 0)
     assert db.chamber_reading_counts(con, 1)["tapo_export"][0] == 2
     with con:
-        assert db.delete_chamber_readings(con, 1, "tapo_export") == 2
+        assert db.delete_chamber_readings(con, 1, "tapo_export") == (2, 0)
     assert "tapo_export" not in db.chamber_reading_counts(con, 1)
     assert db.chamber_reading_counts(con, 1)["manual"][0] == 1     # other sources untouched
 

@@ -865,6 +865,19 @@ def step_dry_start():
     if not p["cure_locked_at"] and not closed:
         st.info("Lock the cure first. Drying then starts on the day the meat came out of the bag.")
     blk("Wrap, net and weigh")
+    # chamber choice sits outside the form: widgets inside a form only react on submit, so the
+    # "new chamber" fields would never appear before "Start drying" (audit 26 Oct, #1)
+    names = [c["name"] for c in db.chambers(con)]
+    c4, c5 = st.columns(2)
+    ch_name = (c4.selectbox("Drying chamber", names + ["+ New chamber"], key=f"drych{pid}")
+               if names else "+ New chamber")
+    new_ch = new_kind = None
+    if ch_name == "+ New chamber":
+        new_ch = c5.text_input("New chamber name", value="Fridge drawer", key=f"drynewch{pid}")
+        new_kind = st.radio("New chamber type", list(safety.KINDS), format_func=safety.KINDS.get,
+                            horizontal=True, index=None, key=f"drynewkind{pid}",
+                            help="Fridge: about 0-4 °C. Curing chamber: about 10-15 °C. Sets the temperature "
+                                 "rules.")
     with st.form(f"drystart{pid}"):
         c1, c2, c3 = st.columns(3)
         ds = c1.date_input("Drying start", value=d(p["cure_end_actual"]) or db.today(), format="DD/MM/YYYY",
@@ -876,13 +889,6 @@ def step_dry_start():
                              value=35.0, step=1.0,
                              help=f"Allowed {safety.TARGET_MIN:g}-{safety.TARGET_MAX:g} %, usual "
                                   f"{safety.TARGET_USUAL[0]:g}-{safety.TARGET_USUAL[1]:g} %. " "Measured on the meat at the start of drying: start weight minus packaging.")
-        names = [c["name"] for c in db.chambers(con)]
-        c4, c5 = st.columns(2)
-        ch_name = c4.selectbox("Drying chamber", names + ["+ New chamber"]) if names else "+ New chamber"
-        new_ch = c5.text_input("New chamber name", value="Fridge drawer") if ch_name == "+ New chamber" else None
-        new_kind = st.radio("New chamber type", list(safety.KINDS), format_func=safety.KINDS.get, horizontal=True,
-                            help="Fridge: about 0-4 °C. Curing chamber: about 10-15 °C. Sets the temperature "
-                                 "rules.") if ch_name == "+ New chamber" else None
         with st.expander("Packaging weight (optional)"):
             tare = st.number_input("Packaging: wrap + net [g]", min_value=0.0, value=0.0, step=1.0, format="%.0f")
             tare_est = st.checkbox("Packaging weight is an estimate", value=True)
@@ -893,6 +899,12 @@ def step_dry_start():
             ch_label = (new_ch or "").strip() if ch_name == "+ New chamber" else ch_name
             if not ch_label:
                 st.error("Give the new drying chamber a name, e.g. Fridge drawer.")
+                return
+            if ch_name == "+ New chamber" and not new_kind:
+                st.error("Choose the new chamber's type: fridge or curing chamber. It sets the temperature rules.")
+                return
+            if ch_name == "+ New chamber" and ch_label in names:
+                st.error(f"A chamber called {ch_label} already exists: pick it in the list, or use another name.")
                 return
 
             def start_drying(con_, pid_):          # one transaction: no stray chamber if drying fails
@@ -1000,7 +1012,7 @@ def chamber_section():
             bits.append(f"temperature {min(temps):.1f} to {max(temps):.1f} °C, average {sum(temps)/len(temps):.1f}")
         if rhs:
             bits.append(f"humidity {min(rhs):.0f} to {max(rhs):.0f} %, average {sum(rhs)/len(rhs):.0f}")
-        for n_ in safety.chamber_warnings(cr, ch["kind"] or "fridge")[1]:
+        for n_ in safety.chamber_warnings(cr, KIND or "fridge")[1]:
             st.info(n_, icon=":material/ac_unit:")
         st.caption(f"{len(cr)} readings since drying started: {'; '.join(bits)}. Last reading {fmt_date(cr[-1]['ts'][:10])} "
                    f"{cr[-1]['ts'][11:16]}.")
@@ -1009,11 +1021,15 @@ def chamber_section():
     # fixed title + key: a changing title would make the section close on every rerun
     with st.expander("Chamber settings, import and remove", key=f"chamber_exp{pid}"):
         kinds = list(safety.KINDS)
+        dry_done = bool(p["dry_locked_at"])
         new_kind = st.segmented_control(
-            "Type", kinds, default=ch["kind"] or "fridge", key=f"chkind{pid}", disabled=closed,
+            "Type", kinds, default=KIND or ch["kind"] or "fridge", key=f"chkind{pid}", disabled=closed or dry_done,
             format_func=lambda k_: f"{safety.KINDS[k_]} (warn above {safety.TEMP_MAX[k_]:g} °C)",
-            help="Sets which temperature rules apply. Applies to every project using this chamber.")
-        if new_kind and new_kind != (ch["kind"] or "fridge"):
+            help="Sets which temperature rules apply to batches still drying in this chamber. "
+                 "Batches whose drying is locked keep the type they had.")
+        if dry_done:
+            st.caption("Drying is locked, so this batch keeps its chamber type. Unlock drying to change it.")
+        elif new_kind and new_kind != (ch["kind"] or "fridge"):
             act(db.set_chamber_kind, ch["id"], new_kind, success=f"{ch['name']} is now a {safety.KINDS[new_kind].lower()}")
         st.markdown("**Import from the Tapo app**")
         st.caption("In the Tapo app: sensor → History → View All → download icon → pick interval and range. "
@@ -1072,14 +1088,20 @@ def chamber_section():
                 c1, c2 = st.columns(2)
                 rm_a = c1.date_input("Only from (optional)", value=None, format="DD/MM/YYYY", key=f"rm_a{pid}")
                 rm_b = c2.date_input("Only to (optional)", value=None, format="DD/MM/YYYY", key=f"rm_b{pid}")
-                sure = st.checkbox("Remove them. This applies to the whole chamber, so every project using "
+                locked = db.locked_periods(con, ch["id"])
+                if locked:
+                    st.caption("Kept in any case, because their drying is locked: " + "; ".join(
+                        f"{r['name']} ({fmt_date(r['dry_start'])} to {fmt_date(r['dry_end'])})" for r in locked) + ".")
+                sure = st.checkbox("Remove them. This applies to the whole chamber, so every project still drying in "
                                    f"{ch['name']} loses these readings.", key=f"rm_ok{pid}")
                 if st.button("Remove readings", disabled=not sure, key=f"rm_b_{pid}"):
                     with con:
-                        n = db.delete_chamber_readings(con, ch["id"], src,
-                                                       datetime.combine(rm_a, time.min) if rm_a else None,
-                                                       datetime.combine(rm_b, time(23, 59, 59)) if rm_b else None)
-                    st.session_state["flash"] = f"Removed {n} readings from {ch['name']}. Import the right file now."
+                        n, kept = db.delete_chamber_readings(con, ch["id"], src,
+                                                             datetime.combine(rm_a, time.min) if rm_a else None,
+                                                             datetime.combine(rm_b, time(23, 59, 59)) if rm_b else None)
+                    st.session_state["flash"] = (f"Removed {n} readings from {ch['name']}"
+                                                 + (f"; kept {kept} from locked drying periods" if kept else "")
+                                                 + ". Import the right file now.")
                     st.rerun()
         if tapo_sync.is_configured():
             st.markdown("**Straight from the hub**")

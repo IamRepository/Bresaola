@@ -149,7 +149,8 @@ def _iso(d) -> str | None:
 # columns added after v0.2.0; older databases (and backups) get them on open
 MIGRATIONS = {"project": [("start_date", "TEXT"), ("spice_note", "TEXT"),
                           ("cure_locked_at", "TEXT"), ("dry_locked_at", "TEXT"),
-                          ("equalise_locked_at", "TEXT"), ("cure_fridge_c", "REAL")],
+                          ("equalise_locked_at", "TEXT"), ("cure_fridge_c", "REAL"),
+                          ("dry_kind", "TEXT")],
               "photo": [("stage", "TEXT")],
               "chamber": [("kind", "TEXT")]}
 
@@ -175,6 +176,9 @@ def connect(path: str | Path) -> sqlite3.Connection:
                                 "WHERE equalise_end IS NOT NULL")
     con.execute("UPDATE project SET start_date = substr(created_at, 1, 10) WHERE start_date IS NULL")
     con.execute("UPDATE chamber SET kind = 'fridge' WHERE kind IS NULL")   # all chambers so far were fridges
+    # finished drying keeps the chamber type it had (v0.4.3): later changes to the chamber don't rewrite it
+    con.execute("""UPDATE project SET dry_kind = (SELECT kind FROM chamber WHERE chamber.id = project.chamber_id)
+                   WHERE dry_locked_at IS NOT NULL AND dry_kind IS NULL AND chamber_id IS NOT NULL""")
     # v0.2 had a separate cure "Method" field; fold it into the cure notes once
     con.execute("""UPDATE project SET cure_note = CASE WHEN cure_note IS NULL OR cure_note = ''
                        THEN cure_method ELSE cure_method || char(10) || cure_note END,
@@ -206,9 +210,12 @@ def set_chamber_kind(con, chamber_id: int, kind: str) -> None:
 
 
 def chamber_kind(con, project_row) -> str | None:
-    """The drying kind for a project, or None before drying has a chamber."""
+    """The drying kind for a project, or None before drying has a chamber. Once drying is locked, the
+    type it had then is kept, so changing the chamber later does not rewrite finished batches."""
     if not project_row["chamber_id"]:
         return None
+    if "dry_kind" in project_row.keys() and project_row["dry_kind"]:
+        return project_row["dry_kind"]
     r = con.execute("SELECT kind FROM chamber WHERE id=?", (project_row["chamber_id"],)).fetchone()
     return (r["kind"] or "fridge") if r else None
 
@@ -236,14 +243,30 @@ def chamber_reading_counts(con, chamber_id: int) -> dict[str, tuple[int, str, st
     return {r["source"]: (r["n"], r["a"], r["b"]) for r in rows}
 
 
-def delete_chamber_readings(con, chamber_id: int, source: str, start=None, end=None) -> int:
-    """Remove readings of one source (optionally only between start and end, inclusive). Returns the count."""
-    q, args = "DELETE FROM chamber_reading WHERE chamber_id=? AND source=?", [chamber_id, source]
+def locked_periods(con, chamber_id: int) -> list[sqlite3.Row]:
+    """Drying periods in this chamber that are locked (finished or closed): their readings are kept."""
+    return con.execute("""SELECT name, dry_start, dry_end FROM project
+                          WHERE chamber_id=? AND dry_locked_at IS NOT NULL AND dry_start IS NOT NULL
+                            AND dry_end IS NOT NULL ORDER BY dry_start""", (chamber_id,)).fetchall()
+
+
+_OUTSIDE_LOCKED = """NOT EXISTS (SELECT 1 FROM project p WHERE p.chamber_id = chamber_reading.chamber_id
+                       AND p.dry_locked_at IS NOT NULL AND p.dry_start IS NOT NULL AND p.dry_end IS NOT NULL
+                       AND chamber_reading.ts >= p.dry_start AND chamber_reading.ts <= p.dry_end || 'T23:59:59')"""
+
+
+def delete_chamber_readings(con, chamber_id: int, source: str, start=None, end=None) -> tuple[int, int]:
+    """Remove readings of one source (optionally only between start and end, inclusive).
+    Readings inside a locked drying period are kept, so finished batches and their PDFs don't change.
+    Returns (removed, kept)."""
+    q, args = "chamber_id=? AND source=?", [chamber_id, source]
     if start:
         q += " AND ts >= ?"; args.append(_iso(start))
     if end:
         q += " AND ts <= ?"; args.append(_iso(end))
-    return con.execute(q, args).rowcount
+    removed = con.execute(f"DELETE FROM chamber_reading WHERE {q} AND {_OUTSIDE_LOCKED}", args).rowcount
+    kept = con.execute(f"SELECT COUNT(*) FROM chamber_reading WHERE {q}", args).fetchone()[0]
+    return removed, kept
 
 
 # ----------------------------- project ------------------------------------- #
@@ -359,6 +382,11 @@ def set_start_date(con, pid: int, day) -> None:
         if follows:
             if new > today():
                 raise ValueError("The start date is in the future")
+            # the bag date moves along: it must stay on or before the out-of-bag date (audit 26 Oct, #6)
+            if p["cure_end_actual"] and new.isoformat() > p["cure_end_actual"]:
+                raise ValueError(f"The start date can't be after the out-of-bag date "
+                                 f"({date.fromisoformat(p['cure_end_actual']):%d %b %Y}), because the bag "
+                                 "date moves with it. Change the out-of-bag date first.")
             planned = calc.cure_end_date(new, p["thickness_cm"], p["shape"]) if p["thickness_cm"] else None
             con.execute("UPDATE project SET cure_start=?, cure_end_planned=? WHERE id=?",
                         (new.isoformat(), planned.isoformat() if planned else None, pid))
@@ -479,6 +507,8 @@ def lock_dry(con, pid: int, end_day) -> None:
     p = project(con, pid)
     if not p["dry_start"]:
         raise ValueError("Drying has not started")
+    if not p["cure_locked_at"]:          # locks go in order: spice -> cure -> dry (audit 26 Oct, #7)
+        raise ValueError("Lock the cure first")
     end = date.fromisoformat(_iso(end_day))
     if end < date.fromisoformat(p["dry_start"]):
         raise ValueError(f"The end date is before drying started ({date.fromisoformat(p['dry_start']):%d %b %Y})")
@@ -487,13 +517,16 @@ def lock_dry(con, pid: int, end_day) -> None:
         raise ValueError(f"The end date is before the last weigh-in ({date.fromisoformat(last):%d %b %Y})")
     if end > today():
         raise ValueError("The end date is in the future")
-    con.execute("UPDATE project SET dry_end=?, dry_locked_at=? WHERE id=?", (_iso(end_day), _now(), pid))
+    kind = chamber_kind(con, p) if p["chamber_id"] else None
+    con.execute("UPDATE project SET dry_end=?, dry_locked_at=?, dry_kind=? WHERE id=?",
+                (_iso(end_day), _now(), kind, pid))
     log(con, pid, "dry_locked", f"ended {_iso(end_day)}")
 
 
 def unlock_dry(con, pid: int, reason: str) -> None:
     _require_open(con, pid)
-    con.execute("UPDATE project SET dry_locked_at=NULL, dry_end=NULL WHERE id=?", (pid,))   # drying goes on
+    con.execute("UPDATE project SET dry_locked_at=NULL, dry_end=NULL, dry_kind=NULL WHERE id=?",
+                (pid,))   # drying goes on; follows the chamber's type again
     log(con, pid, "dry_unlocked", reason)
 
 

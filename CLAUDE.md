@@ -21,7 +21,8 @@
 When a trigger applies, say so and recommend a full audit; the owner decides.
 
 **Last full audit:** 26 Oct 2026 on v0.4.2 (commit 9f51343): 21 findings, list in the project notes (claude.ai).
-**Last diff audit:** none yet.
+**Last diff audit:** none yet. Fixes since the full audit: v0.4.3 (full-audit items 1-5 of the owner's list:
+new-chamber form, PDF long text, chamber type frozen at drying lock, day-0 vs out-of-bag date, dry lock needs cure lock).
 
 ## Other rules
 - Every bug fix gets a test that fails before the fix.
