@@ -20,7 +20,8 @@ nothing, and the two do not share data.
    - Source: use the existing `compose.yaml`
    - Skip the Web Station / web portal step → **Done**.
    The first build downloads Python and the packages: allow several minutes.
-6. Open `http://<NAS IP>:8502` (port 8502 because the BBQ dashboard uses 8501).
+6. Open `http://<NAS IP>:8503` (8501 is the BBQ dashboard and 8502 is taken too; if the start fails with
+   "port is already allocated", change the first number in `compose.yaml` to a free port).
    Check: version **v0.4.1** (or later) under "Bresaola Tracker", **no** yellow test-mode note,
    no demo project.
 
@@ -32,7 +33,7 @@ nothing, and the two do not share data.
    with **Leave out a period** 03/10/2026 12:15 to 09/10/2026 04:00.
 
 ## 4. From your phone (outside home)
-10. Tailscale is already on the NAS for the BBQ dashboard: open `http://<NAS Tailscale name>:8502`.
+10. Tailscale is already on the NAS for the BBQ dashboard: open `http://<NAS Tailscale name>:8503`.
     No router port forwarding.
 
 ## 5. Backups

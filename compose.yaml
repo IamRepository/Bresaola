@@ -5,7 +5,7 @@ services:
     image: bresaola-tracker
     container_name: bresaola
     ports:
-      - "8502:8501"          # 8501 is taken by the BBQ dashboard; open http://<nas>:8502
+      - "8503:8501"          # 8501 (BBQ dashboard) and 8502 are taken on the NAS; open http://<nas>:8503
     volumes:
       - ./data:/data         # database + photos live here, outside the container
     environment:
