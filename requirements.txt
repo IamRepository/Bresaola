@@ -1,5 +1,5 @@
 openpyxl>=3.1
-streamlit>=1.65
+streamlit>=1.65,<1.67   # tested on 1.65 and 1.66.1; raise after testing a newer one
 pandas>=2.0
 altair>=5.0
 pillow>=10

@@ -1,0 +1,21 @@
+# Synology: Container Manager -> Project -> Create, path = this folder (docker/bresaola)
+services:
+  bresaola:
+    build: .
+    image: bresaola-tracker
+    container_name: bresaola
+    ports:
+      - "8502:8501"          # 8501 is taken by the BBQ dashboard; open http://<nas>:8502
+    volumes:
+      - ./data:/data         # database + photos live here, outside the container
+    environment:
+      BRESAOLA_MODE: persistent
+      BRESAOLA_DATA: /data
+      BRESAOLA_TZ: Europe/Berlin
+      TZ: Europe/Berlin
+      # Tapo hub sync (optional): fill in, then the Dry step shows "Sync last 24 h from hub"
+      # TAPO_USERNAME: you@example.com
+      # TAPO_PASSWORD: your-tapo-password
+      # TAPO_HUB_IP: 192.168.1.50
+      # TAPO_SENSORS: Fridge drawer=<sensor nickname in the Tapo app>
+    restart: unless-stopped

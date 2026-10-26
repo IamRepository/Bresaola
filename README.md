@@ -39,6 +39,7 @@ Opens at http://localhost:8501. Data and photos go to `data/` (not committed).
 
 ### Test mode vs persistent
 - Default is **test mode**: a banner on every screen, and an empty database is filled with a demo copy of Palermo Spicy.
+- **Synology NAS (Docker):** step-by-step guide in [docs/NAS.md](docs/NAS.md); `Dockerfile` + `compose.yaml` in the repo root.
 - Set `BRESAOLA_MODE=persistent` (and optionally `BRESAOLA_DATA=/path/to/data`) on the PC/NAS for real use: no banner, no demo data.
 - **Download backup** / **Restore from backup** in the sidebar move everything (database + photos) as one zip.
 
