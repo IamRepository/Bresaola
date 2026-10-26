@@ -21,8 +21,8 @@
 When a trigger applies, say so and recommend a full audit; the owner decides.
 
 **Last full audit:** 26 Oct 2026 on v0.4.2 (commit 9f51343): 21 findings, list in the project notes (claude.ai).
-**Last diff audit:** none yet. Fixes since the full audit: v0.4.3 (full-audit items 1-5 of the owner's list:
-new-chamber form, PDF long text, chamber type frozen at drying lock, day-0 vs out-of-bag date, dry lock needs cure lock).
+**Last diff audit:** 26 Oct 2026, 6627330..2ede185 (v0.4.3, full-audit fixes 1-5): no High/Medium findings, 170 tests pass.
+Note: v0.4.3 adds a schema column (`project.dry_kind`), which is full-audit trigger 2: recommend one before the next batch.
 
 ## Other rules
 - Every bug fix gets a test that fails before the fix.
