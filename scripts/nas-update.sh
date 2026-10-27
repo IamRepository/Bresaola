@@ -50,7 +50,8 @@ repo_version() { grep -o '[0-9][0-9.]*' "$APP/bresaola/__init__.py" | head -1; }
 running_ok() {                       # the new container runs the checked-out version and opens the database
     healthy || return 1
     got=$(docker exec bresaola python -c "import py_compile; py_compile.compile('app.py', cfile='/tmp/app.pyc', doraise=True); \
-from bresaola import __version__, db, storage; db.connect(storage.db_path()).close(); print(__version__)" 2>>"$LOG")
+import altair, pandas, streamlit; from bresaola import __version__, calc, db, report, safety, sensors, storage, \
+tapo_sync, blends, demo; db.connect(storage.db_path()).close(); print(__version__)" 2>>"$LOG")
     [ "$got" = "$(repo_version)" ] || { log "check: container reports '${got}', expected $(repo_version)"; return 1; }
 }
 
@@ -84,6 +85,7 @@ fi
 FAILED_FILE="$APP/update.failed"
 if [ -f "$FAILED_FILE" ] && [ "$(cat "$FAILED_FILE")" = "$NEW" ]; then
     log "FAILED earlier: $(git_ log -1 --format=%h "$NEW") didn't start, not trying again until stable changes"
+    log "  (if it was a passing problem, e.g. no internet during the build: delete update.failed, run again)"
     exit 1
 fi
 
@@ -121,9 +123,10 @@ if [ -n "$OLD" ]; then
         log "FAILED: previous version didn't start either: restore by hand (docs/NAS.md section 8)"
     fi
 else
-    # first run (folder came from the ZIP): no previous commit to go back to; forget the checkout so
-    # the files stay as they are and the next run starts over
+    # first run (folder came from the ZIP): no previous commit to go back to. The folder now holds the
+    # stable files; forget the checkout so the next run treats it as a first run again
     git_ update-ref -d HEAD 2>/dev/null
-    log "FAILED on the first run: see the lines above; Container Manager -> Project -> Build brings the app back"
+    log "FAILED on the first run: see the lines above. To get the app back: install the last ZIP that worked"
+    log "  (docs/NAS.md section 7: Extract here + Overwrite, then Build); delete update.failed to try again"
 fi
 exit 1

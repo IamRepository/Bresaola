@@ -110,6 +110,9 @@ One-time setup:
     rebuilds once. Check `docker/bresaola/update.log`: it should end with `OK: <version> is running`;
     a second **Run** says `up to date`.
 
+If a failure was passing (no internet during the build, say): delete `docker/bresaola/update.failed` and
+**Run** the task again. If the very first run fails, install the last ZIP that worked (section 7).
+
 Stopping it: untick "Enabled" on `bresaola-update`. Going back by hand: the database copies in
 `data/pre-update/` are plain SQLite files; restore one by stopping the project and copying it over
 `data/bresaola.sqlite`.

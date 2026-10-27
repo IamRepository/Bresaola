@@ -21,12 +21,18 @@
 When a trigger applies, say so and recommend a full audit; the owner decides.
 
 **Last full audit:** 26 Oct 2026 on v0.4.2 (commit 9f51343): 21 findings, list in the project notes (claude.ai).
-**Last diff audit:** 27 Oct 2026, 5cdad44..3be27ab (v0.4.6, compose image tag = version): no High/Medium.
+**Last diff audit:** 27 Oct 2026, e52f0b9..aa70801 (v0.4.7, NAS auto-update): no High; 4 Mediums fixed + re-checked
+(one more Medium, the first-run recovery message, fixed after). Before that: 27 Oct 2026, 5cdad44..3be27ab (v0.4.6, compose image tag = version): no High/Medium.
 Before that: 27 Oct 2026, c069c5e..93c6aef (v0.4.5, photo caption edit + delete): no High/Medium; one Low
 (unlink error) fixed after. Before that: 26 Oct 2026, 2ede185..0a9a45f (v0.4.4, full-audit fixes 6-13 of the owner's list): no High/Medium;
 one Low (leave-out caption count) fixed after. Before that: 6627330..2ede185 (v0.4.3): no High/Medium.
 Note: v0.4.3 added a schema column (`project.dry_kind`) and v0.4.4 changed reading/averaging logic: full-audit
 triggers 2, recommend one before the next batch. Still open from the full audit: owner's list 14-20.
+
+## Releases to the NAS
+- The NAS auto-updates nightly (04:00) from the **`stable`** branch (scripts/nas-update.sh), never from `main`.
+- Move `stable` only after the diff audit passed and the owner said OK: `git push origin main:stable`.
+  Say in the reply that it will be on the NAS the next morning.
 
 ## Other rules
 - Every bug fix gets a test that fails before the fix.
