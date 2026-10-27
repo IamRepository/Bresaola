@@ -6,3 +6,7 @@ __pycache__/
 *.pyc
 before-restore/
 tests/
+.env
+deploy_key.pub
+update.log
+scripts/

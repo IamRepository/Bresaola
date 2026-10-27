@@ -4,3 +4,6 @@ __pycache__/
 .pytest_cache/
 *.pyc
 before-restore/
+.env
+deploy_key.pub
+update.log

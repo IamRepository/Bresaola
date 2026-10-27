@@ -4,7 +4,7 @@ services:
     build: .
     # The tag is the app version: a new version has a tag Container Manager hasn't seen, so "Build"
     # really builds. With a fixed name it reused the old image (found on the NAS, 27 Oct 2026).
-    image: bresaola-tracker:0.4.6
+    image: bresaola-tracker:0.4.7
     container_name: bresaola
     # Host networking: the app listens straight on the NAS's own address (no Docker port forwarding).
     # Port 8520: MailPlus Server reserves 8500-8507 and drops outside connections to them.
@@ -19,11 +19,12 @@ services:
       BRESAOLA_DATA: /data
       BRESAOLA_TZ: Europe/Berlin
       TZ: Europe/Berlin
-      # Tapo hub sync (optional): fill in, then the Dry step shows "Sync last 24 h from hub"
-      # TAPO_USERNAME: you@example.com
-      # TAPO_PASSWORD: your-tapo-password
-      # TAPO_HUB_IP: 192.168.1.50
-      # TAPO_SENSORS: Fridge drawer=<sensor nickname in the Tapo app>
+      # Tapo hub sync (optional): put the values in a file ".env" next to this one (see docs/NAS.md),
+      # never in this file: updates replace compose.yaml, and .env stays out of git and the image.
+      TAPO_USERNAME: ${TAPO_USERNAME:-}
+      TAPO_PASSWORD: ${TAPO_PASSWORD:-}
+      TAPO_HUB_IP: ${TAPO_HUB_IP:-}
+      TAPO_SENSORS: ${TAPO_SENSORS:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8520/_stcore/health')"]
       interval: 60s
