@@ -495,6 +495,30 @@ def show_photos(rows, cols_n=4):
             except Exception:  # missing or unreadable file must not break the page
                 st.warning("Can't show this photo" if f.exists() else "Photo file missing")
             st.caption(f"{fmt_date(r['taken_at'][:10])}" + (f", {r['caption']}" if r["caption"] else ""))
+            if not closed:                       # closed projects keep their photos as they are
+                photo_menu(r)
+
+
+def photo_menu(r):
+    """Edit the caption or delete one photo (open projects only)."""
+    k = r["id"]
+    with st.popover("Edit photo", icon=":material/more_horiz:", type="tertiary", key=f"phm{k}"):
+        cap = st.text_input("Caption", value=r["caption"] or "", key=f"phc{k}", placeholder="optional")
+        if st.button("Save caption", key=f"phs{k}", width="stretch",
+                     disabled=(cap.strip() or None) == (r["caption"] or None)):
+            act(db.set_photo_caption, k, cap, success="Caption saved")
+        st.markdown('<hr class="pop-sep">', unsafe_allow_html=True)
+        sure = st.checkbox("Delete this photo for good", key=f"phx{k}")
+        if st.button("Delete photo", key=f"phd{k}", width="stretch", disabled=not sure):
+            try:
+                with con:
+                    path = db.delete_photo(con, k)
+            except (db.Locked, ValueError) as e:
+                st.error(str(e))
+                return
+            storage.delete_photo_file(path)      # after the commit: no photo row without its file
+            st.session_state["flash"] = "Photo deleted"
+            st.rerun()
 
 
 def journal(stage: str, note_value: str | None, save_note, placeholder: str) -> str:

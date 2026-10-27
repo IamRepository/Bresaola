@@ -99,6 +99,17 @@ def delete_project_photos(project_id: int) -> None:
     shutil.rmtree(data_dir() / PHOTO_DIR / str(project_id), ignore_errors=True)
 
 
+def delete_photo_file(rel: str) -> bool:
+    """Delete one stored photo. Only files inside the photos folder are touched, whatever the
+    database says. Returns True if a file was removed."""
+    root = (data_dir() / PHOTO_DIR).resolve()
+    f = (data_dir() / rel).resolve()
+    if root not in f.parents or not f.is_file():
+        return False
+    f.unlink()
+    return True
+
+
 def photo_file(rel: str) -> Path:
     return data_dir() / rel
 

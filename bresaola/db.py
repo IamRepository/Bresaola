@@ -777,6 +777,31 @@ def add_photo(con, pid: int, path: str, taken_at, caption: str | None = None,
                        (pid, reading_id, _iso(taken_at), path, caption, stage)).lastrowid
 
 
+def _photo(con, photo_id: int) -> sqlite3.Row:
+    row = con.execute("SELECT * FROM photo WHERE id=?", (photo_id,)).fetchone()
+    if row is None:
+        raise ValueError("That photo no longer exists")
+    return row
+
+
+def set_photo_caption(con, photo_id: int, caption: str | None) -> None:
+    """Captions stay editable after a step is locked, like notes; not once the project is closed."""
+    ph = _photo(con, photo_id)
+    _require_open(con, ph["project_id"])
+    con.execute("UPDATE photo SET caption=? WHERE id=?", ((caption or "").strip() or None, photo_id))
+
+
+def delete_photo(con, photo_id: int) -> str:
+    """Remove a photo from an open project; returns its file path so the caller can delete the file
+    after the database change is committed. Closed projects keep their photos."""
+    ph = _photo(con, photo_id)
+    _require_open(con, ph["project_id"])
+    con.execute("DELETE FROM photo WHERE id=?", (photo_id,))
+    log(con, ph["project_id"], "photo_deleted",
+        f"{ph['stage'] or 'other'}, taken {ph['taken_at'][:10]}" + (f", {ph['caption']}" if ph["caption"] else ""))
+    return ph["path"]
+
+
 def photos(con, pid: int, stage: str | None = None) -> list[sqlite3.Row]:
     """All photos of a project, or only those belonging to one stage."""
     if stage is None:

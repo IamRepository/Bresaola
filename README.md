@@ -2,7 +2,7 @@
 
 Records home-cured bresaola batches from spice mix to slicing: calculated amounts, cure time, weigh-ins, chamber temperature/humidity and photos, then a PDF summary when the batch is closed.
 
-**Status: v0.4.4 — journey layout, PDF summary, Tapo sensor import, food-safety checks.**
+**Status: v0.4.5 — journey layout, PDF summary, Tapo sensor import, food-safety checks.**
 
 ## Steps (journey rail at the top; a next-action card says what to do today)
 1. **Day 0: spice and bag** – meat weight, EcoCure on/off, blend → planned grams, actual amounts; measure the piece and seal the bag (cure time shown live). *Done* locks day 0 and starts the cure.
