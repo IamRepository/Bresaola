@@ -516,8 +516,9 @@ def photo_menu(r):
             except (db.Locked, ValueError) as e:
                 st.error(str(e))
                 return
-            storage.delete_photo_file(path)      # after the commit: no photo row without its file
-            st.session_state["flash"] = "Photo deleted"
+            gone = storage.delete_photo_file(path)   # after the commit: no photo row without its file
+            st.session_state["flash"] = ("Photo deleted" if gone or not storage.photo_file(path).exists() else
+                                         f"Photo removed from the app; its file could not be deleted ({path})")
             st.rerun()
 
 

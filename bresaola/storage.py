@@ -106,7 +106,10 @@ def delete_photo_file(rel: str) -> bool:
     f = (data_dir() / rel).resolve()
     if root not in f.parents or not f.is_file():
         return False
-    f.unlink()
+    try:
+        f.unlink()
+    except OSError:                  # e.g. NAS permissions: the photo is gone from the app anyway
+        return False
     return True
 
 

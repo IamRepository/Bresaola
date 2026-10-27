@@ -21,7 +21,8 @@
 When a trigger applies, say so and recommend a full audit; the owner decides.
 
 **Last full audit:** 26 Oct 2026 on v0.4.2 (commit 9f51343): 21 findings, list in the project notes (claude.ai).
-**Last diff audit:** 26 Oct 2026, 2ede185..0a9a45f (v0.4.4, full-audit fixes 6-13 of the owner's list): no High/Medium;
+**Last diff audit:** 27 Oct 2026, c069c5e..93c6aef (v0.4.5, photo caption edit + delete): no High/Medium; one Low
+(unlink error) fixed after. Before that: 26 Oct 2026, 2ede185..0a9a45f (v0.4.4, full-audit fixes 6-13 of the owner's list): no High/Medium;
 one Low (leave-out caption count) fixed after. Before that: 6627330..2ede185 (v0.4.3): no High/Medium.
 Note: v0.4.3 added a schema column (`project.dry_kind`) and v0.4.4 changed reading/averaging logic: full-audit
 triggers 2, recommend one before the next batch. Still open from the full audit: owner's list 14-20.

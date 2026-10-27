@@ -107,3 +107,12 @@ def test_caption_from_the_day0_screen(env):
     at.run()
     assert not at.exception, at.exception
     assert db.photos(env, 1)[0]["caption"] == "rub before bagging"
+
+
+def test_file_that_cannot_be_deleted_does_not_crash(env, monkeypatch):
+    """Diff audit v0.4.5 (Low): an unlink error (NAS permissions) raised on the page."""
+    _, rel = add(env)
+    def boom(self, *a, **k):
+        raise PermissionError("read-only")
+    monkeypatch.setattr(Path, "unlink", boom)
+    assert storage.delete_photo_file(rel) is False
