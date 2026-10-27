@@ -203,3 +203,26 @@ def test_chamber_axis_format(env):
 def test_cure_timeline_shows_out_date(env):
     at = open_app(1, "cure")
     assert any("planned end 18 Sep · out 20 Sep" in m.value for m in at.markdown)
+
+
+# owner 27 Oct: time axes mixed "Mon 21", "Sep 27" and "October" on one axis
+def test_time_axes_use_one_date_format(env):
+    with env:
+        sensors.import_readings(env, 1, [(datetime(2026, 9, 21) + (datetime(2026, 9, 21, 0, 15) - datetime(2026, 9, 21)) * i,
+                                          2.0, 80.0) for i in range(4 * 24 * 30)], "tapo_export")
+    at = open_app(1, "dry")
+    specs = []
+
+    def walk(n):
+        for c in getattr(n, "children", {}).values():
+            if "vega" in str(getattr(c, "type", "")).lower():
+                specs.append(json.loads(c.proto.spec))
+            walk(c)
+    walk(at._tree)
+    xs = [layer["encoding"]["x"] for sp in specs for layer in sp.get("layer", [])
+          if isinstance(layer.get("encoding", {}).get("x"), dict) and "axis" in layer["encoding"]["x"]]
+    assert xs and all(x["axis"]["format"] == "%d %b" and x["axis"].get("values") for x in xs), xs
+    weight = next(x for x in xs if x["field"] == "Date")
+    assert [v["date"] for v in weight["axis"]["values"]] == [20, 26, 30, 4, 8]     # the weigh-in days
+    chamber = next(x for x in xs if x["field"] == "Time")
+    assert [v["date"] for v in chamber["axis"]["values"]][:3] == [21, 28, 5]       # every 7 days

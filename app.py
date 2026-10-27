@@ -1028,6 +1028,21 @@ def weigh_in_climate() -> dict:
 QUARTERS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
 
 
+def time_axis(first, last) -> alt.Axis:
+    """One date format on the whole axis ("27 Sep"). Vega's default mixes "Mon 21", "Sep 27" and
+    "October" on one axis (owner, 27 Oct). Ticks every day, week or two weeks, by the span shown."""
+    days = max((pd.Timestamp(last) - pd.Timestamp(first)).total_seconds() / 86400, 0)
+    if days <= 3:
+        return alt.Axis(format="%d %b %H:%M", labelOverlap=True, title=None)
+    step = 1 if days <= 12 else 7 if days <= 70 else 14
+    # fixed steps from the first day (the start of drying): even gaps, e.g. 20 Sep, 27 Sep, 04 Oct
+    t, end, ticks = pd.Timestamp(first).normalize(), pd.Timestamp(last), []
+    while t <= end:
+        ticks.append(alt.DateTime(year=t.year, month=t.month, date=t.day))
+        t += pd.Timedelta(days=step)
+    return alt.Axis(format="%d %b", values=ticks, labelOverlap=True, title=None)
+
+
 def left_out_periods(ch):
     """Periods the sensor was out of the chamber, kept per chamber: applied to every import and hub sync
     (full audit 27 Oct, #3), and can be added without uploading a file (#4)."""
@@ -1110,7 +1125,7 @@ def chamber_section():
             layers.append(alt.Chart(sub).mark_line(
                 color=colour, strokeWidth=1.6 if hrs else 1.2,
                 point=alt.OverlayMarkDef(color=colour, size=22) if hrs >= 12 else False).encode(
-                x=alt.X("Time:T", title=None),
+                x=alt.X("Time:T", title=None, axis=time_axis(cdf["Time"].min(), cdf["Time"].max())),
                 y=alt.Y(f"{field}:Q", title=title, scale=alt.Scale(zero=False),
                         axis=alt.Axis(format=fmt)),          # constant humidity showed "80.000000"
                 detail="seg:N", tooltip=tip))
@@ -1303,7 +1318,10 @@ def step_dry():
     blk("What happened")
     rdf = pd.DataFrame([{"Date": pd.Timestamp(r["day"]), "Weight (g)": r["gross_g"]} for r in rows])
     line = alt.Chart(rdf).mark_line(point=True, color=RED).encode(
-        x=alt.X("Date:T", title=None),
+        # ticks on the weigh-in days: those are the dates that matter here
+        x=alt.X("Date:T", title=None, axis=alt.Axis(
+            format="%d %b", labelOverlap=True,
+            values=[alt.DateTime(year=t.year, month=t.month, date=t.day) for t in rdf["Date"]])),
         y=alt.Y("Weight (g):Q", title="Weight incl. wrap + net [g]", scale=alt.Scale(
             zero=False, domain=[min(s["target_gross_g"], rdf["Weight (g)"].min()) * 0.97,
                                 max(s["start_gross_g"], rdf["Weight (g)"].max()) * 1.01])),
