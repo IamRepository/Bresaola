@@ -20,8 +20,10 @@
 
 When a trigger applies, say so and recommend a full audit; the owner decides.
 
-**Last full audit:** 26 Oct 2026 on v0.4.2 (commit 9f51343): 21 findings, list in the project notes (claude.ai).
-**Last diff audit:** 27 Oct 2026, aa70801..712636b (v0.4.8, full-audit items 14-19 + script follow-up): no High;
+**Last full audit:** 27 Oct 2026 on v0.4.8 (commit b00fd60): 10 findings (2 High), 1-8 + 10 fixed in v0.4.9, 9 accepted
+(DST hour split across two hub syncs). Cost: 254k tokens, about 2 % of the owner's usage. Before that: 26 Oct 2026 on v0.4.2.
+**Last diff audit:** 27 Oct 2026, b00fd60..b8b35d3 (v0.4.9, full-audit fixes): no High/Medium (107k tokens).
+Before that: 27 Oct 2026, aa70801..712636b (v0.4.8, full-audit items 14-19 + script follow-up): no High;
 3 Mediums (hub sync with 2 sensors on a fresh DB, unescaped names in errors, old docker-compose without
 --quiet) + 1 Low fixed after, with tests. Still open from the full audit: none (owner's 21 = audit #4 old-DB
 migration, doesn't affect the NAS data). Before that: 27 Oct 2026, e52f0b9..aa70801 (v0.4.7, NAS auto-update): no High; 4 Mediums fixed + re-checked
@@ -29,8 +31,7 @@ migration, doesn't affect the NAS data). Before that: 27 Oct 2026, e52f0b9..aa70
 Before that: 27 Oct 2026, c069c5e..93c6aef (v0.4.5, photo caption edit + delete): no High/Medium; one Low
 (unlink error) fixed after. Before that: 26 Oct 2026, 2ede185..0a9a45f (v0.4.4, full-audit fixes 6-13 of the owner's list): no High/Medium;
 one Low (leave-out caption count) fixed after. Before that: 6627330..2ede185 (v0.4.3): no High/Medium.
-Note: v0.4.3 added a schema column (`project.dry_kind`) and v0.4.4 changed reading/averaging logic: full-audit
-triggers 2, recommend one before the next batch.
+Note: v0.4.9 adds table `chamber_exclusion` (left-out periods); reviewed by the diff audit only.
 
 ## Releases to the NAS
 - The NAS auto-updates nightly (04:00) from the **`stable`** branch (scripts/nas-update.sh), never from `main`.
