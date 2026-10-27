@@ -22,7 +22,8 @@ When a trigger applies, say so and recommend a full audit; the owner decides.
 
 **Last full audit:** 27 Oct 2026 on v0.4.8 (commit b00fd60): 10 findings (2 High), 1-8 + 10 fixed in v0.4.9, 9 accepted
 (DST hour split across two hub syncs). Cost: 254k tokens, about 2 % of the owner's usage. Before that: 26 Oct 2026 on v0.4.2.
-**Last diff audit:** 27 Oct 2026, df1cad4..1adcdd3 (v0.4.10, chart time axes): no High/Medium (75k tokens).
+**Last diff audit:** 27 Oct 2026, 6de43a5..77beff4 (v0.4.11, backlog: recent-pace finish, left-aligned table, small fixes): no High/Medium (86k tokens).
+Before that: 27 Oct 2026, df1cad4..1adcdd3 (v0.4.10, chart time axes): no High/Medium (75k tokens).
 Before that: 27 Oct 2026, b00fd60..b8b35d3 (v0.4.9, full-audit fixes): no High/Medium (107k tokens).
 Before that: 27 Oct 2026, aa70801..712636b (v0.4.8, full-audit items 14-19 + script follow-up): no High;
 3 Mediums (hub sync with 2 sensors on a fresh DB, unescaped names in errors, old docker-compose without
