@@ -21,7 +21,8 @@
 When a trigger applies, say so and recommend a full audit; the owner decides.
 
 **Last full audit:** 26 Oct 2026 on v0.4.2 (commit 9f51343): 21 findings, list in the project notes (claude.ai).
-**Last diff audit:** 27 Oct 2026, c069c5e..93c6aef (v0.4.5, photo caption edit + delete): no High/Medium; one Low
+**Last diff audit:** 27 Oct 2026, 5cdad44..3be27ab (v0.4.6, compose image tag = version): no High/Medium.
+Before that: 27 Oct 2026, c069c5e..93c6aef (v0.4.5, photo caption edit + delete): no High/Medium; one Low
 (unlink error) fixed after. Before that: 26 Oct 2026, 2ede185..0a9a45f (v0.4.4, full-audit fixes 6-13 of the owner's list): no High/Medium;
 one Low (leave-out caption count) fixed after. Before that: 6627330..2ede185 (v0.4.3): no High/Medium.
 Note: v0.4.3 added a schema column (`project.dry_kind`) and v0.4.4 changed reading/averaging logic: full-audit
@@ -31,3 +32,5 @@ triggers 2, recommend one before the next batch. Still open from the full audit:
 - Every bug fix gets a test that fails before the fix.
 - Real data lives on the NAS (`docker/bresaola/data`); Streamlit Cloud is test-only and loses data on reboot.
 - NAS port 8520 with host networking: Synology MailPlus blocks 8500-8507 (see docs/NAS.md).
+- Every version bump also changes the image tag in compose.yaml (tests/test_deploy.py enforces it):
+  Container Manager's Build reuses an image whose name it already has.
