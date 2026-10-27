@@ -59,7 +59,12 @@ The H100 keeps only the last 24 hours, so this needs a daily task.
     Select the task → **Run** to test; the result is in the task's log.
 
 ## 7. Updating to a new version
-16. Download the new ZIP (step 1), and replace all files in `docker/bresaola` **except the `data` folder**
-    (and your edited `compose.yaml`, if you added Tapo settings).
-17. Container Manager → Project → **bresaola** → **Action** → **Stop**, **Build**, **Start**.
-    The data folder is untouched; the database is upgraded automatically when the new version opens it.
+16. In the app: **Download backup** first (the new version may upgrade the database when it opens it).
+17. Upload the new ZIP to `docker/bresaola` → right-click → **Extract here** → **Overwrite**. The ZIP has no
+    `data` folder, so the database and photos are untouched. Delete the ZIP.
+18. Container Manager → Project → **bresaola** → **Action** → **Stop**, then **Build** (it starts by itself).
+    The Build log must be long (`pip install`, `Successfully installed`, a few minutes). If it shows only
+    "Created / Starting / Started", nothing was built: Stop → **Clean**, delete the `bresaola-tracker` image
+    under **Image**, and Build again. (Before v0.4.6 the image always had the same name, so this was needed
+    every time.)
+19. Check the version in the sidebar. Old `bresaola-tracker:<version>` images can be deleted under **Image**.
