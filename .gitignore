@@ -7,3 +7,4 @@ before-restore/
 .env
 deploy_key.pub
 update.log
+update.failed

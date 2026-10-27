@@ -39,8 +39,15 @@ def nas(tmp_path):
     key = tmp_path / "key"
     key.write_text("k")
     # fakes: docker logs its calls; curl answers unless $FAIL_HEALTH exists
+    # docker exec: the database backup "fails" (tests the plain-copy path); the version check prints
+    # the checked-out version, or an old one if $STALE exists, or fails if $FAIL_HEALTH exists
     (bin_ / "docker").write_text(f'#!/bin/sh\necho "$@" >> {tmp_path}/docker.log\n'
-                                 '[ "$1" = exec ] && exit 1\nexit 0\n')
+                                 'if [ "$1" = exec ]; then\n'
+                                 '  case "$*" in *backup*) exit 1;; esac\n'
+                                 f'  [ -f {tmp_path}/FAIL_HEALTH ] && exit 1\n'
+                                 f'  [ -f {tmp_path}/STALE ] && {{ echo 0.0.1; exit 0; }}\n'
+                                 f'  grep -o "[0-9][0-9.]*" {app}/bresaola/__init__.py | head -1; exit 0\n'
+                                 'fi\n[ "$1" = images ] && printf "0.9.0\\n1.0.0\\n1.5.0\\n"\nexit 0\n')
     (bin_ / "curl").write_text(f'#!/bin/sh\n[ -f {tmp_path}/FAIL_HEALTH ] && exit 7\nexit 0\n')
     for f in bin_.iterdir():
         f.chmod(0o755)
@@ -95,13 +102,62 @@ def test_new_version_is_deployed(nas):
     assert (nas.app / "data" / "bresaola.sqlite").read_bytes() == b"REAL DATA"
 
 
-def test_failed_start_goes_back(nas):
+def test_failed_start_goes_back_and_is_not_retried(nas):
     nas.run()
     nas.commit("1.2.0")
     (nas.tmp / "FAIL_HEALTH").write_text("")
     r = nas.run()
     assert r.returncode == 1
     assert "going back" in nas.log() and nas.version() == "1.0.0"
+    (nas.tmp / "FAIL_HEALTH").unlink()
+    (nas.tmp / "docker.log").unlink()
+    copies = len(list((nas.app / "data" / "pre-update").glob("bresaola-*.sqlite")))
+    r = nas.run()                                               # same bad commit: skipped, no new copy
+    assert r.returncode == 1 and "not trying again" in nas.log()
+    assert not (nas.tmp / "docker.log").exists()
+    assert len(list((nas.app / "data" / "pre-update").glob("bresaola-*.sqlite"))) == copies
+    nas.commit("1.2.1")                                         # a fixed version is tried
+    assert nas.run().returncode == 0 and nas.version() == "1.2.1"
+
+
+def test_container_still_on_old_version_counts_as_failure(nas):
+    """Diff audit v0.4.7 (Medium): the web server answering didn't prove the new version runs."""
+    nas.run()
+    nas.commit("1.4.0")
+    (nas.tmp / "STALE").write_text("")
+    assert nas.run().returncode == 1
+    assert "container reports '0.0.1', expected 1.4.0" in nas.log() and nas.version() == "1.0.0"
+
+
+def test_failed_first_run_is_retried_later(nas):
+    """Diff audit v0.4.7 (Medium): a failed first run then said "up to date" forever."""
+    (nas.tmp / "FAIL_HEALTH").write_text("")
+    assert nas.run().returncode == 1 and "first run" in nas.log()
+    r = nas.run()                                    # same commit: still reported as a failure, not "up to date"
+    assert r.returncode == 1 and "up to date" not in nas.log()
+    (nas.tmp / "FAIL_HEALTH").unlink()
+    nas.commit("1.0.1")
+    r = nas.run()
+    assert r.returncode == 0 and "OK: 1.0.1 is running" in nas.log()
+
+
+def test_compose_copy_kept_before_update(nas):
+    """Diff audit v0.4.7 (Medium): local compose.yaml edits were replaced without a copy."""
+    (nas.app / "compose.yaml").write_text("services:\n  bresaola:\n    image: bresaola-tracker:1.0.0\n# mine\n")
+    nas.run()
+    kept = list((nas.app / "data" / "pre-update").glob("compose-*.yaml"))
+    assert kept and "# mine" in kept[0].read_text()
+
+
+def test_previous_image_is_kept_for_rollback(nas):
+    """Diff audit v0.4.7 (Medium): all other image tags were deleted, so a rollback had to rebuild."""
+    nas.run()
+    nas.commit("1.5.0")
+    (nas.tmp / "docker.log").unlink()
+    nas.run()
+    log = (nas.tmp / "docker.log").read_text().splitlines()
+    assert [l for l in log if l.startswith("rmi")][-1:] == ["rmi bresaola-tracker:0.9.0"]
+    assert "rmi bresaola-tracker:1.0.0" not in log and "rmi bresaola-tracker:1.5.0" not in log
 
 
 def test_only_last_five_database_copies_kept(nas):

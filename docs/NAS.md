@@ -78,8 +78,12 @@ The H100 keeps only the last 24 hours, so this needs a daily task.
 ## 8. Automatic updates from GitHub (optional, from v0.4.7)
 The NAS follows the **`stable`** branch, not `main`. New versions go to `main` first (tested on Streamlit
 Cloud); `stable` is moved only after the diff audit and your OK. A nightly task checks `stable` and, if
-there is something new: copies the database to `data/pre-update/` (last 5 kept), takes the new files,
-rebuilds, restarts, and goes back to the previous version if the app doesn't come up. Log: `update.log`.
+there is something new: copies the database (and `compose.yaml`) to `data/pre-update/` (last 5 kept), takes
+the new files, rebuilds and restarts. It then checks that the container reports the new version and opens the
+database; if not, it goes back to the previous version (whose image is kept) and won't retry that version
+until `stable` changes (it fails, and e-mails you, every night until then). Log: `update.log`.
+Note: going back restores the program, not the database. Database upgrades only ever add columns, which the
+previous version ignores; the copy in `data/pre-update/` is there if you want the exact old state.
 
 One-time setup:
 20. Install the v0.4.7 ZIP the usual way (section 7), so `scripts/nas-update.sh` is on the NAS.
