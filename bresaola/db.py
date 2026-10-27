@@ -969,5 +969,6 @@ def drying_status(con, pid: int) -> dict:
         "latest_gross_g": latest,
         "loss_pct": calc.loss_pct(start, latest, tare),
         "progress": calc.progress_to_target(start, latest, pct, tare),
-        "eta": calc.drying_eta(rs, start, pct, tare),
+        "eta": calc.recent_eta(rs, start, pct, tare),          # recent pace: the honest estimate
+        "eta_all": calc.drying_eta(rs, start, pct, tare),      # straight line through all weigh-ins
     }

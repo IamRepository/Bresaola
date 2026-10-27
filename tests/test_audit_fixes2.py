@@ -61,7 +61,7 @@ def test_target_reached_messages_agree(env):
     assert "Target weight reached." in h
     assert "next weigh-in by" not in h and "target reached" in h
     m = {x.label: x.value for x in at.metric}
-    assert m["Earliest finish"] == "Reached"
+    assert m["Estimated finish"] == "Reached"
 
 
 # 11 is a file-upload flow (AppTest cannot upload); checked in the browser.

@@ -175,7 +175,7 @@ _MD_SPECIAL = re.compile(r"([\\`*_\[\]|~<>$:])")
 def md(s) -> str:
     """User text (project or chamber names) inside Markdown: shown exactly as typed, e.g. My_test_batch
     stays upright and :red[x] stays literal (audit #14)."""
-    return _MD_SPECIAL.sub(r"\\\1", str(s))
+    return _MD_SPECIAL.sub(r"\\\1", str(s).replace("&", "&amp;"))     # &copy; stays "&copy;", not ©
 
 
 _MD_ALL = re.compile(r"([\\`*_{}\[\]()#+\-.!|~<>$:=])")
@@ -184,7 +184,11 @@ _MD_ALL = re.compile(r"([\\`*_{}\[\]()#+\-.!|~<>$:=])")
 def md_text(s) -> str:
     """Multi-line user text (final notes) as typed: every Markdown character escaped, line breaks kept,
     the same as in the PDF (full audit 27 Oct, #6)."""
-    return "  \n".join(_MD_ALL.sub(r"\\\1", line) for line in str(s).splitlines())
+    out = []
+    for line in str(s).replace("&", "&amp;").splitlines():
+        body = line.lstrip(" ")              # leading spaces would turn the line into a code block
+        out.append("&nbsp;" * (len(line) - len(body)) + _MD_ALL.sub(r"\\\1", body))
+    return "  \n".join(out)
 
 
 def band(cells: list[tuple[str, str, str]], cols: int = 3, extra: str = ""):
@@ -1063,7 +1067,7 @@ def left_out_periods(ch):
         lo_d = c1.date_input("From", value=None, format="DD/MM/YYYY", key=f"lo_d{pid}")
         lo_t = c2.selectbox("at", QUARTERS, index=0, key=f"lo_t{pid}")
         hi_d = c3.date_input("To", value=None, format="DD/MM/YYYY", key=f"hi_d{pid}")
-        hi_t = c4.selectbox("at ", QUARTERS, index=len(QUARTERS) - 1, key=f"hi_t{pid}",
+        hi_t = c4.selectbox("at ", QUARTERS + ["23:59"], index=len(QUARTERS), key=f"hi_t{pid}",
                             help="Inclusive: a reading at exactly this time is left out too")
         lo = datetime.combine(lo_d, datetime.strptime(lo_t, "%H:%M").time()) if lo_d else None
         hi = datetime.combine(hi_d, datetime.strptime(hi_t, "%H:%M").time()) if hi_d else None
@@ -1236,7 +1240,9 @@ def chamber_section():
                 if errs:
                     st.session_state["flash_error"] = "Hub sync failed. " + "; ".join(errs)
                 else:
-                    st.session_state["flash"] = "; ".join(f"{md(r.chamber)}: {r.stored} readings" for r in res)
+                    st.session_state["flash"] = "; ".join(f"{md(r.chamber)}: {r.stored} readings"
+                                                             + (f", {r.skipped} skipped (left-out or finished "
+                                                                "drying period)" if r.skipped else "") for r in res)
                 st.rerun()
 
 
@@ -1306,22 +1312,27 @@ def step_dry():
     if s["progress"] >= 1:
         eta_txt, eta_help = "Reached", "The latest weigh-in is at or below the target weight."
     elif eta:
-        eta_txt = eta.eta_date.strftime("%d %b" if eta.eta_date.year == db.today().year else "%d %b %Y")
-        eta_help = (f"Straight line through all weigh-ins ({eta.grams_per_day:.1f} g/day). "
-                    "Drying slows down over time, so expect later.")
+        fmt_ = lambda d_: d_.strftime("%d %b" if d_.year == db.today().year else "%d %b %Y")
+        eta_txt = fmt_(eta.eta_date)
+        all_ = s.get("eta_all")
+        eta_help = (f"At the pace of the last {calc.RECENT_DAYS} days ({eta.grams_per_day:.1f} g/day). "
+                    + (f"A line through all weigh-ins says {fmt_(all_.eta_date)} ({all_.grams_per_day:.1f} g/day); "
+                       if all_ else "")
+                    + "drying keeps slowing, so the real date is usually later still.")
     else:
-        eta_txt, eta_help = "–", "Needs 2+ weigh-ins"
-    m[4].metric("Earliest finish", eta_txt, help=eta_help)
+        eta_txt, eta_help = "–", "Needs 2+ weigh-ins, losing weight"
+    m[4].metric("Estimated finish", eta_txt, help=eta_help)
     st.progress(min(max(s["progress"], 0.0), 1.0))
 
     # --- what happened ---------------------------------------------------------- #
     blk("What happened")
     rdf = pd.DataFrame([{"Date": pd.Timestamp(r["day"]), "Weight (g)": r["gross_g"]} for r in rows])
     line = alt.Chart(rdf).mark_line(point=True, color=RED).encode(
-        # ticks on the weigh-in days: those are the dates that matter here
+        # ticks on the weigh-in days, the dates that matter here; with many weigh-ins every 7 or 14 days
         x=alt.X("Date:T", title=None, axis=alt.Axis(
             format="%d %b", labelOverlap=True,
-            values=[alt.DateTime(year=t.year, month=t.month, date=t.day) for t in rdf["Date"]])),
+            values=[alt.DateTime(year=t.year, month=t.month, date=t.day) for t in rdf["Date"]])
+            if len(rdf) <= 12 else time_axis(rdf["Date"].min(), rdf["Date"].max())),
         y=alt.Y("Weight (g):Q", title="Weight incl. wrap + net [g]", scale=alt.Scale(
             zero=False, domain=[min(s["target_gross_g"], rdf["Weight (g)"].min()) * 0.97,
                                 max(s["start_gross_g"], rdf["Weight (g)"].max()) * 1.01])),
@@ -1342,15 +1353,21 @@ def step_dry():
         "Since last RH [%]": period_cell(per.get(d(r["day"])), 1),
         "Data [%]": f"{per[d(r['day'])][4] * 100:.0f}" if per.get(d(r["day"])) else "–",
         "Note": r["note"] or ""} for r in rows])
+    left = "left"            # owner 27 Oct: every value aligned left, like the headings
     st.dataframe(tdf, hide_index=True, width="stretch", height=min(38 + 35 * len(tdf), 420), column_config={
-        "Day °C": st.column_config.TextColumn(help="Average of all chamber readings on the weigh-in day. "
+        "Date": st.column_config.TextColumn(alignment=left),
+        "Day": st.column_config.NumberColumn(alignment=left),
+        "Weight [g]": st.column_config.NumberColumn(alignment=left),
+        "Lost [%]": st.column_config.NumberColumn(alignment=left),
+        "Day °C": st.column_config.TextColumn(alignment=left, help="Average of all chamber readings on the weigh-in day. "
                                               "* = the sensor reported for less than half the day."),
-        "Day RH [%]": st.column_config.TextColumn(help="Day average, as for Day °C."),
-        "Since last °C": st.column_config.TextColumn(help="Average since the previous weigh-in (12:00 to "
+        "Day RH [%]": st.column_config.TextColumn(alignment=left, help="Day average, as for Day °C."),
+        "Since last °C": st.column_config.TextColumn(alignment=left, help="Average since the previous weigh-in (12:00 to "
                                                      "12:00): the conditions behind this weight loss."),
-        "Since last RH [%]": st.column_config.TextColumn(help="Average since the previous weigh-in."),
-        "Data [%]": st.column_config.TextColumn(help="Share of hours since the previous weigh-in with "
-                                                "sensor readings. Under 50 % the averages get a *.")})
+        "Since last RH [%]": st.column_config.TextColumn(alignment=left, help="Average since the previous weigh-in."),
+        "Data [%]": st.column_config.TextColumn(alignment=left, help="Share of hours since the previous weigh-in with "
+                                                "sensor readings. Under 50 % the averages get a *."),
+        "Note": st.column_config.TextColumn(alignment=left)})
     st.caption("Day: average on the weigh-in day. Since last: average since the previous weigh-in, the "
                "conditions behind that weight loss. * less than half the time covered by sensor data; – none; "
                f"⚠ outside the safe range for a {safety.KINDS[KIND or 'fridge'].lower()} (above "

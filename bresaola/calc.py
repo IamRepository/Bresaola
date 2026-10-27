@@ -186,6 +186,25 @@ class Eta:
     eta_date: date
 
 
+RECENT_DAYS = 21        # the finish estimate uses the pace of the last 3 weeks ...
+RECENT_MIN_POINTS = 3   # ... but at least the last 3 weigh-ins
+
+
+def recent_eta(readings: list[tuple[date, float]], start_gross_g: float,
+               target_loss_pct: float, tare_g: float = 0.0) -> Eta | None:
+    """Finish estimate from the recent pace (weigh-ins of the last RECENT_DAYS, at least RECENT_MIN_POINTS).
+    Drying slows as the meat dries, so a line through all weigh-ins is too early; the recent pace is
+    closer, though it can still be early because drying keeps slowing."""
+    pts = sorted(readings)
+    if len(pts) < 2:
+        return None
+    last = pts[-1][0]
+    recent = [p for p in pts if (last - p[0]).days <= RECENT_DAYS]
+    if len(recent) < RECENT_MIN_POINTS:
+        recent = pts[-RECENT_MIN_POINTS:]
+    return drying_eta(recent, start_gross_g, target_loss_pct, tare_g)
+
+
 def drying_eta(readings: list[tuple[date, float]], start_gross_g: float,
                target_loss_pct: float, tare_g: float = 0.0,
                last_n: int | None = None) -> Eta | None:
