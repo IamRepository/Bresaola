@@ -47,7 +47,9 @@ def nas(tmp_path):
                                  f'  [ -f {tmp_path}/FAIL_HEALTH ] && exit 1\n'
                                  f'  [ -f {tmp_path}/STALE ] && {{ echo 0.0.1; exit 0; }}\n'
                                  f'  grep -o "[0-9][0-9.]*" {app}/bresaola/__init__.py | head -1; exit 0\n'
-                                 'fi\n[ "$1" = images ] && printf "0.9.0\\n1.0.0\\n1.5.0\\n"\nexit 0\n')
+                                 'fi\n[ "$1" = images ] && printf "0.9.0\\n1.0.0\\n1.5.0\\n"\n'
+                                 f'case "$*" in *"build --quiet"*) [ -f {tmp_path}/NO_QUIET ] && exit 2;; esac\n'
+                                 'exit 0\n')
     (bin_ / "curl").write_text(f'#!/bin/sh\n[ -f {tmp_path}/FAIL_HEALTH ] && exit 7\nexit 0\n')
     for f in bin_.iterdir():
         f.chmod(0o755)
@@ -180,3 +182,13 @@ def test_setup_writes_public_key(nas, tmp_path):
         pytest.skip("no ssh-keygen here")
     assert r.returncode == 0, r.stderr
     assert (nas.app / "deploy_key.pub").read_text().startswith("ssh-ed25519 ")
+
+
+def test_old_compose_without_quiet_still_builds(nas):
+    """Diff audit v0.4.8 (Medium): an old docker-compose without --quiet would fail every update."""
+    (nas.tmp / "NO_QUIET").write_text("")
+    nas.run()
+    nas.commit("1.6.0")
+    assert nas.run().returncode == 0 and nas.version() == "1.6.0"
+    calls = (nas.tmp / "docker.log").read_text().splitlines()
+    assert "compose -p bresaola build" in calls                    # second, full-output build

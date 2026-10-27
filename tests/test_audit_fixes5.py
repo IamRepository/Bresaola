@@ -179,3 +179,45 @@ def test_quiet_nightly_log():
     assert "LogLevel=ERROR" in script and "BUILDX_GIT_INFO=false" in script and "build --quiet" in script
     docker = (ROOT / "Dockerfile").read_text()
     assert "PIP_ROOT_USER_ACTION=ignore" in docker and "PIP_DISABLE_PIP_VERSION_CHECK=1" in docker
+
+
+# diff audit v0.4.8 (Medium): two sensors on a fresh database both get their chamber
+def test_sync_first_setup_creates_every_configured_chamber(tmp_path, tapo, monkeypatch):
+    tapo.setenv("TAPO_SENSORS", "Fridge drawer=Bresaola sensor; Cellar=Bresaola sensor")
+    con = db.connect(tmp_path / "x.sqlite")
+    res = tapo_sync.sync(con, fake_factory(FakeSensor()))
+    assert [r.error for r in res] == [None, None]
+    assert sorted(c["name"] for c in db.chambers(con)) == ["Cellar", "Fridge drawer"]
+
+
+# diff audit v0.4.8 (Medium): error messages quoting a name show it as typed
+def test_error_message_names_are_escaped(env):
+    with env:
+        db.rename_project(env, 1, "Batch *one*")
+        db.create_project(env, "Batch two", "Classic Italian", False, 1000, start_date=TODAY)
+    at = start()                                              # opens on whichever project is first
+    field = next(t for t in at.sidebar.text_input if t.label == "New name")
+    other = "Batch *one*" if field.value == "Batch two" else "Batch two"
+    field.input(other)
+    at.run()
+    next(b for b in at.sidebar.button if b.label == "Rename").click()
+    at.run()
+    shown = [e.value for e in at.error]
+    assert any("already exists" in e for e in shown), shown
+    if "*" in other:
+        assert any(r"'Batch \*one\*' already exists" in e for e in shown), shown
+
+
+# diff audit v0.4.8 (Low): "fridge  DRAWER" is the same chamber as "Fridge drawer", as in the hub sync
+def test_new_chamber_duplicate_check_ignores_case(env):
+    from tests.test_audit_fixes3 import open_dry_start, second_batch_ready_to_dry
+    pid = second_batch_ready_to_dry(env)
+    at = open_dry_start(pid)
+    next(s for s in at.selectbox if s.label == "Drying chamber").set_value("+ New chamber")
+    at.run()
+    next(t for t in at.text_input if t.label == "New chamber name").input("fridge  DRAWER")
+    next(r for r in at.radio if r.label == "New chamber type").set_value("chamber")
+    next(n for n in at.number_input if n.label == "Start weight incl. wrap + net [g]").set_value(950)
+    next(b for b in at.button if b.label == "Start drying").click()
+    at.run()
+    assert any("already exists" in e.value for e in at.error)

@@ -138,7 +138,7 @@ def act(fn, *a, success: str | None = None, goto: str | None = None, **kw):
         with con:
             fn(con, *a, **kw)
     except (db.Locked, ValueError) as e:
-        st.error(str(e))
+        st.error(md(e))                   # messages quote names: show them as typed
         return False
     except sqlite3.IntegrityError as e:   # safety net; db functions check first
         st.error(f"Could not save: {e}")
@@ -953,7 +953,8 @@ def step_dry_start():
             if ch_name == "+ New chamber" and not new_kind:
                 st.error("Choose the new chamber's type: fridge or curing chamber. It sets the temperature rules.")
                 return
-            if ch_name == "+ New chamber" and ch_label in names:
+            if ch_name == "+ New chamber" and " ".join(ch_label.split()).casefold() in {
+                    " ".join(n_.split()).casefold() for n_ in names}:        # same rule as the hub sync
                 st.error(f"A chamber called {md(ch_label)} already exists: pick it in the list, or use another name.")
                 return
 

@@ -92,18 +92,19 @@ def _norm(name: str) -> str:
     return " ".join(name.split()).casefold()
 
 
-def find_chamber(con, name: str) -> tuple[int | None, str | None]:
+def find_chamber(con, name: str, may_create: bool = False) -> tuple[int | None, str | None]:
     """(chamber id, None) for the chamber called `name`, ignoring capitals and extra spaces.
-    No match while chambers exist: (None, error) - never a silent new chamber (audit 26 Oct, #20).
-    No chambers at all yet: creates the first one."""
+    No match: (None, error) - never a silent new chamber (audit 26 Oct, #20), unless may_create
+    (the database had no chambers at all when the sync started: first-time setup)."""
     rows = db.chambers(con)
     for r in rows:
         if _norm(r["name"]) == _norm(name):
             return r["id"], None
-    if rows:
-        return None, (f"no chamber called '{name}' (TAPO_SENSORS). Existing: "
-                      + ", ".join(r["name"] for r in rows) + ". Fix the name in .env; nothing stored.")
-    return db.get_or_create_chamber(con, name.strip(), "Tapo T31x via H100"), None
+    if may_create:
+        return db.get_or_create_chamber(con, " ".join(name.split()), "Tapo T31x via H100"), None
+    return None, (f"no chamber called '{name}' (TAPO_SENSORS in .env). Existing: "
+                  + ", ".join(r["name"] for r in rows) + ". Fix the name in .env, or start drying a batch "
+                  "in a chamber with this name; nothing stored.")
 
 
 def sync(con, client_factory=None) -> list[Result]:
@@ -116,10 +117,11 @@ def sync(con, client_factory=None) -> list[Result]:
         for r in results:
             r.error = f"{type(e).__name__}: {e}"
         return results
+    first_setup = not db.chambers(con)              # no chambers yet: every configured one may be created
     for r in results:
         rows = data.get(r.sensor, [])
         with con:
-            ch_id, r.error = find_chamber(con, r.chamber)
+            ch_id, r.error = find_chamber(con, r.chamber, may_create=first_setup)
             if ch_id is None:
                 continue
             r.stored, r.rejected = sensors.import_readings(con, ch_id, rows, SOURCE)

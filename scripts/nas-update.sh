@@ -44,8 +44,9 @@ healthy() {
 }
 
 deploy() {                           # check out commit $1, rebuild, restart
-    # quiet build: the log shows build output only when something fails
-    git_ reset -q --hard "$1" && (cd "$APP" && compose build --quiet && compose up -d) >>"$LOG" 2>&1
+    # quiet build; if it fails (or an old docker-compose doesn't know --quiet), build again with the
+    # full output, so the log shows why
+    git_ reset -q --hard "$1" && (cd "$APP" && { compose build --quiet || compose build; } && compose up -d) >>"$LOG" 2>&1
 }
 
 repo_version() { grep -o '[0-9][0-9.]*' "$APP/bresaola/__init__.py" | head -1; }
