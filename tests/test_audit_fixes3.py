@@ -109,7 +109,7 @@ def test_pdf_with_very_long_texts(env):
 # 3: changing the chamber type, or removing readings, leaves batches with locked drying alone
 def test_locked_drying_keeps_its_chamber_type(env):
     with env:
-        db.lock_dry(env, 1, date(2026, 10, 8))
+        db.lock_dry(env, 1, date(2026, 10, 8), below_target_ok=True)
     assert db.project(env, 1)["dry_kind"] == "fridge"
     ch = db.project(env, 1)["chamber_id"]
     with env:
@@ -122,7 +122,7 @@ def test_locked_drying_keeps_its_chamber_type(env):
 
 def test_migration_freezes_type_of_already_locked_batches(env, tmp_path):
     with env:
-        db.lock_dry(env, 1, date(2026, 10, 8))
+        db.lock_dry(env, 1, date(2026, 10, 8), below_target_ok=True)
         env.execute("UPDATE project SET dry_kind=NULL")                  # as in a v0.4.2 database
     env.close()
     con = db.connect(storage.db_path())
@@ -134,7 +134,7 @@ def test_removing_readings_keeps_locked_drying_periods(env):
     with env:
         sensors.import_readings(env, ch, [(datetime(2026, 9, 25, 12), 3.0, 80.0),
                                           (datetime(2026, 10, 10, 12), 3.0, 80.0)], "tapo_export")
-        db.lock_dry(env, 1, date(2026, 10, 8))                           # drying 20 Sep - 8 Oct
+        db.lock_dry(env, 1, date(2026, 10, 8), below_target_ok=True)                           # drying 20 Sep - 8 Oct
         removed, kept = db.delete_chamber_readings(env, ch, "tapo_export")
     assert (removed, kept) == (1, 1)
     assert [r["ts"][:10] for r in db.chamber_readings(env, ch) if r["source"] == "tapo_export"] == ["2026-09-25"]
@@ -158,4 +158,4 @@ def test_drying_lock_needs_cure_lock(env):
     with env:
         env.execute("UPDATE project SET cure_locked_at=NULL WHERE id=1")
     with pytest.raises(ValueError, match="Lock the cure first"):
-        db.lock_dry(env, 1, date(2026, 10, 8))
+        db.lock_dry(env, 1, date(2026, 10, 8), below_target_ok=True)

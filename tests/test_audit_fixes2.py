@@ -80,7 +80,7 @@ def test_legacy_day0_locked_without_cure_data(env):
 def test_legacy_equalise_start_does_not_block_close(env):
     sql(env, "UPDATE project SET equalise_start='2026-10-09' WHERE id=1")
     with env:
-        db.lock_dry(env, 1, date(2026, 10, 8))
+        db.lock_dry(env, 1, date(2026, 10, 8), below_target_ok=True)
     assert db.close_problems(env, 1) == []
 
 
@@ -111,7 +111,7 @@ def test_day0_with_blend_missing_from_list(env):
 # 15a: closing date is written like every other date
 def test_closed_date_format(env):
     with env:
-        db.lock_dry(env, 1, date(2026, 10, 8))
+        db.lock_dry(env, 1, date(2026, 10, 8), below_target_ok=True)
         db.close_project(env, 1, "")
     at = start("finish")
     assert any("Closed on " in s.value and "2026-" not in s.value for s in at.success)

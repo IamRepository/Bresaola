@@ -53,7 +53,7 @@ def finished_project(con, name="A"):
     db.lock_cure(con, pid)
     db.set_drying(con, pid, start=date(2026, 8, 13), start_gross_g=2100)
     db.add_reading(con, pid, date(2026, 8, 20), 2050)
-    db.lock_dry(con, pid, date(2026, 10, 1))
+    db.lock_dry(con, pid, date(2026, 10, 1), below_target_ok=True)
     return pid
 
 
@@ -160,7 +160,7 @@ def test_cure_and_dry_locks(con):
     db.add_photo(con, pid, "photos/1/x.jpg", "2026-08-13", stage="cure")   # photos allowed too
     db.set_drying(con, pid, start=date(2026, 8, 13), start_gross_g=2100)
     db.add_reading(con, pid, date(2026, 8, 20), 2060)
-    db.lock_dry(con, pid, date(2026, 10, 1))
+    db.lock_dry(con, pid, date(2026, 10, 1), below_target_ok=True)
     for f in (lambda: db.add_reading(con, pid, date(2026, 9, 2), 2000),
               lambda: db.change_target(con, pid, 30),
               lambda: db.delete_reading(con, pid, date(2026, 8, 13))):

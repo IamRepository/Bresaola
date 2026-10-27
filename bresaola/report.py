@@ -45,7 +45,7 @@ S = {
     "title": ParagraphStyle("title", fontName="DejaVu-Bold", fontSize=19, leading=23, textColor=INK),
     "sub": ParagraphStyle("sub", fontName="DejaVu", fontSize=9, leading=12, textColor=MUTED),
     "h2": ParagraphStyle("h2", fontName="DejaVu-Bold", fontSize=11.5, leading=15, textColor=RED,
-                         spaceBefore=10, spaceAfter=4),
+                         spaceBefore=10, spaceAfter=4, keepWithNext=1),    # never alone at a page end
     "body": ParagraphStyle("body", fontName="DejaVu", fontSize=9, leading=12.5, textColor=INK),
     "small": ParagraphStyle("small", fontName="DejaVu", fontSize=7.5, leading=10, textColor=MUTED),
     "lab": ParagraphStyle("lab", fontName="DejaVu", fontSize=7.5, leading=9.5, textColor=MUTED),
@@ -257,6 +257,9 @@ def build_pdf(con, pid: int) -> bytes:
             ("Drying", f"{dry_days} days", "wrapped and netted" if p["dry_end"] else "so far"),
             ("Total", f"{total_days} days", "from day 0"),
         ]))
+        if p["dry_end"] and (short := db.below_target(con, pid)):
+            story.append(Spacer(1, 4))
+            story.append(_alert(safety.below_target_message(*short)))
     else:
         story.append(Paragraph("Drying has not started yet, so there is no result.", S["body"]))
 

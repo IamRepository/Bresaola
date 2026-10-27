@@ -45,7 +45,7 @@ def test_demo_summary_contents(con):
 
 def test_closed_summary_and_final_notes(con):
     with con:
-        db.lock_dry(con, 1, date(2026, 10, 8))
+        db.lock_dry(con, 1, date(2026, 10, 8), below_target_ok=True)
         db.close_project(con, 1, "Firm, sweet, a bit salty. Next time 2.8 % salt & < 35 % loss")
     t = text(report.build_pdf(con, 1))
     assert "Closed 12 Oct 2026" in t and "summary so far" not in t

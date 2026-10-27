@@ -32,8 +32,9 @@ nothing, and the two do not share data.
 7. In the Streamlit Cloud app: sidebar → **Data: backup and restore** → **Download backup**.
 8. In the NAS app: same place → **Restore backup** → choose the zip → **Replace all data**.
    (The cloud copy may contain the demo Palermo data; alternatively start Palermo fresh on the NAS.)
-9. Chamber readings: if they are not in the backup, import the Tapo file again in Dry → Chamber,
-   with **Leave out a period** 03/10/2026 12:15 to 09/10/2026 04:00.
+9. Chamber readings: if they are not in the backup, import the Tapo file again in Dry → Chamber.
+   Under **Left-out periods**, add 03/10/2026 12:15 to 09/10/2026 04:00 (the sensor was out of the fridge):
+   from v0.4.9 it is remembered and applied to every later import and hub sync.
 
 ## 4. From outside home
 10. Connect with **VPN Plus** (on the Synology router) and open `http://192.168.15.130:8520`, the same address as

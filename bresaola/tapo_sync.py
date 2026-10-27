@@ -83,13 +83,20 @@ class Result:
     sensor: str
     stored: int = 0
     rejected: int = 0
+    skipped: int = 0            # inside a saved left-out period or a locked drying period
     first: datetime | None = None
     last: datetime | None = None
     error: str | None = None
 
 
-def _norm(name: str) -> str:
+def norm_name(name: str) -> str:
+    """Chamber names compare without capitals and extra spaces."""
     return " ".join(name.split()).casefold()
+
+
+def hub_fed(name: str) -> bool:
+    """True if TAPO_SENSORS sends readings to this chamber."""
+    return norm_name(name) in {norm_name(c) for c in sensor_map()}
 
 
 def find_chamber(con, name: str, may_create: bool = False) -> tuple[int | None, str | None]:
@@ -98,7 +105,7 @@ def find_chamber(con, name: str, may_create: bool = False) -> tuple[int | None, 
     (the database had no chambers at all when the sync started: first-time setup)."""
     rows = db.chambers(con)
     for r in rows:
-        if _norm(r["name"]) == _norm(name):
+        if norm_name(r["name"]) == norm_name(name):
             return r["id"], None
     if may_create:
         return db.get_or_create_chamber(con, " ".join(name.split()), "Tapo T31x via H100"), None
@@ -124,7 +131,9 @@ def sync(con, client_factory=None) -> list[Result]:
             ch_id, r.error = find_chamber(con, r.chamber, may_create=first_setup)
             if ch_id is None:
                 continue
-            r.stored, r.rejected = sensors.import_readings(con, ch_id, rows, SOURCE)
+            keep, n_ex, n_lk = sensors.protected(con, ch_id, rows)
+            r.skipped = n_ex + n_lk
+            r.stored, r.rejected = sensors.import_readings(con, ch_id, keep, SOURCE)
         if rows:
             r.first, r.last = rows[0][0], rows[-1][0]
     return results
@@ -143,7 +152,8 @@ def main() -> int:
         else:
             span = f"{r.first:%d %b %H:%M} to {r.last:%d %b %H:%M}" if r.first else "no data"
             print(f"{r.chamber} ({r.sensor}): {r.stored} readings, {span}"
-                  + (f", {r.rejected} out of range" if r.rejected else ""))
+                  + (f", {r.rejected} out of range" if r.rejected else "")
+                  + (f", {r.skipped} skipped (left-out or finished drying period)" if r.skipped else ""))
     return 0 if ok else 1
 
 

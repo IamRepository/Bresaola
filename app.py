@@ -150,6 +150,18 @@ def act(fn, *a, success: str | None = None, goto: str | None = None, **kw):
     st.rerun()
 
 
+def fresh(key: str, db_value):
+    """Call right before drawing a keyed control that shows a database value. If the database changed
+    since this browser tab last drew it (another tab, the phone, a restore), drop the control's old
+    value so it shows the database again, instead of saving its stale value back (full audit 27 Oct, #1).
+    Returns the key, so it can be used inline: key=fresh(f"w{pid}", p["green_weight_g"])."""
+    mark = f"_db_{key}"
+    if mark in st.session_state and st.session_state[mark] != db_value:
+        st.session_state.pop(key, None)
+    st.session_state[mark] = db_value
+    return key
+
+
 def blk(title: str):
     """Section title. Plain text only: escaped, so a name like "Fridge <old>" shows as typed (audit #12)."""
     st.markdown(f'<div class="blk">{html.escape(title)}</div>', unsafe_allow_html=True)
@@ -164,6 +176,15 @@ def md(s) -> str:
     """User text (project or chamber names) inside Markdown: shown exactly as typed, e.g. My_test_batch
     stays upright and :red[x] stays literal (audit #14)."""
     return _MD_SPECIAL.sub(r"\\\1", str(s))
+
+
+_MD_ALL = re.compile(r"([\\`*_{}\[\]()#+\-.!|~<>$:=])")
+
+
+def md_text(s) -> str:
+    """Multi-line user text (final notes) as typed: every Markdown character escaped, line breaks kept,
+    the same as in the PDF (full audit 27 Oct, #6)."""
+    return "  \n".join(_MD_ALL.sub(r"\\\1", line) for line in str(s).splitlines())
 
 
 def band(cells: list[tuple[str, str, str]], cols: int = 3, extra: str = ""):
@@ -210,7 +231,7 @@ with st.sidebar:
         sp = db.project(con, pid)
         with st.popover("Edit or delete", icon=":material/more_horiz:", width="stretch"):
             st.markdown('<p class="pop-h">Rename</p>', unsafe_allow_html=True)
-            new_name = st.text_input("New name", value=sp["name"], key=f"rn{pid}", label_visibility="collapsed",
+            new_name = st.text_input("New name", value=sp["name"], key=fresh(f"rn{pid}", sp["name"]), label_visibility="collapsed",
                                      help="The date in front comes from the start date and is added automatically.")
             if st.button("Rename", disabled=sp["status"] == "closed" or new_name.strip() in ("", sp["name"]),
                          key=f"rnb{pid}", width="stretch"):
@@ -218,7 +239,7 @@ with st.sidebar:
             st.markdown('<hr class="pop-sep"><p class="pop-h">Start date (day 0)</p>', unsafe_allow_html=True)
             new_start = st.date_input("Day 0 date", value=d(sp["start_date"]), format="DD/MM/YYYY",
                                       max_value=max(db.today(), d(sp["start_date"])),
-                                      key=f"sd{pid}", label_visibility="collapsed",
+                                      key=fresh(f"sd{pid}", sp["start_date"]), label_visibility="collapsed",
                                       disabled=sp["status"] == "closed")
             st.caption("The day the meat was trimmed, spiced and bagged. Also the date in the project name.")
             if st.button("Change start date", key=f"sdb{pid}", width="stretch",
@@ -262,7 +283,7 @@ with st.sidebar:
                         st.session_state[f"step{new}"] = "day0"
                         st.rerun()
                     except ValueError as e:
-                        st.error(str(e))
+                        st.error(md(e))
 
     dark_on = st.toggle("Dark mode", value=DARK, key="dark_mode",
                         help="Saved in this browser. The page reloads to switch.")
@@ -292,11 +313,12 @@ with st.sidebar:
                     st.session_state["restore_n"] = st.session_state.get("restore_n", 0) + 1   # empty uploader
                     st.session_state["flash"] = "Backup restored. Previous data kept in 'before-restore'."
                 except ValueError as e:
-                    st.session_state["flash_error"] = f"Nothing was changed. {e}"
+                    st.session_state["flash_error"] = f"Nothing was changed. {md(e)}"
                 except Exception as e:
-                    st.session_state["flash_error"] = f"Restore failed, your data is unchanged: {e}"
+                    st.session_state["flash_error"] = f"Restore failed, your data is unchanged: {md(e)}"
                 st.rerun()
-        if unused := db.unused_chambers(con):           # left over from deleted projects (audit #19)
+        # left over from deleted projects (audit #19); a chamber the hub sync feeds is never "unused" (#5)
+        if unused := [c for c in db.unused_chambers(con) if not tapo_sync.hub_fed(c["name"])]:
             with st.popover(f"Unused chambers ({len(unused)})", width="stretch"):
                 st.caption("Drying chambers no project uses. Deleting one removes its readings too.")
                 for c in unused:
@@ -394,7 +416,8 @@ def step_status(s: str) -> tuple[str, str, str, bool]:
         end = d(p["dry_end"]) if p["dry_end"] else today
         main = f"day {(end - d(p['dry_start'])).days} · {lost:.1f} % of {p['target_loss_pct']:g} % lost"
         if done[s]:
-            return state, main, "target reached" if st_["progress"] >= 1 else "ended", False
+            return (state, main, "target reached", False) if st_["progress"] >= 1 else \
+                (state, main, "ended below target", True)
         if st_["progress"] >= 1:
             return state, main, "target reached: press Done", False
         last = db.readings(con, pid)[-1][0]
@@ -516,7 +539,7 @@ def show_photos(rows, cols_n=4):
                 st.image(str(f), width="stretch")
             except Exception:  # missing or unreadable file must not break the page
                 st.warning("Can't show this photo" if f.exists() else "Photo file missing")
-            st.caption(f"{fmt_date(r['taken_at'][:10])}" + (f", {r['caption']}" if r["caption"] else ""))
+            st.caption(f"{fmt_date(r['taken_at'][:10])}" + (f", {md(r['caption'])}" if r["caption"] else ""))
             if not closed:                       # closed projects keep their photos as they are
                 photo_menu(r)
 
@@ -525,7 +548,8 @@ def photo_menu(r):
     """Edit the caption or delete one photo (open projects only)."""
     k = r["id"]
     with st.popover("Edit photo", icon=":material/more_horiz:", type="tertiary", key=f"phm{k}"):
-        cap = st.text_input("Caption", value=r["caption"] or "", key=f"phc{k}", placeholder="optional")
+        cap = st.text_input("Caption", value=r["caption"] or "", key=fresh(f"phc{k}", r["caption"] or ""),
+                            placeholder="optional")
         if st.button("Save caption", key=f"phs{k}", width="stretch",
                      disabled=(cap.strip() or None) == (r["caption"] or None)):
             act(db.set_photo_caption, k, cap, success="Caption saved")
@@ -536,7 +560,7 @@ def photo_menu(r):
                 with con:
                     path = db.delete_photo(con, k)
             except (db.Locked, ValueError) as e:
-                st.error(str(e))
+                st.error(md(e))
                 return
             gone = storage.delete_photo_file(path)   # after the commit: no photo row without its file
             st.session_state["flash"] = ("Photo deleted" if gone or not storage.photo_file(path).exists() else
@@ -548,7 +572,7 @@ def journal(stage: str, note_value: str | None, save_note, placeholder: str) -> 
     """Notes and photos for one step. Always open unless the project is closed.
     Returns the note text currently on screen (callers may save it with Done)."""
     blk("Journal: notes and photos")
-    note = st.text_area("Notes", value=note_value or "", height=100, key=f"note_{stage}{pid}",
+    note = st.text_area("Notes", value=note_value or "", height=100, key=fresh(f"note_{stage}{pid}", note_value or ""),
                         disabled=closed, placeholder=placeholder)
     if not closed and (note.strip() or None) != (note_value or None):
         if st.button("Save notes", key=f"savenote_{stage}{pid}"):
@@ -615,11 +639,12 @@ def step_day0():
     with st.container(border=True):
         c1, c2, c3 = st.columns([3, 2, 2], vertical_alignment="bottom")
         blend_opts = list(BLENDS) if p["blend"] in BLENDS else [p["blend"]] + list(BLENDS)
-        new_b = c1.selectbox("Blend", blend_opts, index=blend_opts.index(p["blend"]), key=f"b{pid}",
+        new_b = c1.selectbox("Blend", blend_opts, index=blend_opts.index(p["blend"]), key=fresh(f"b{pid}", p["blend"]),
                              disabled=locked, format_func=lambda b: b if b in BLENDS else f"{b} (saved recipe)")
         new_w = c2.number_input("Meat weight after trimming [g]", min_value=1.0, step=1.0, format="%.0f",
-                                value=float(p["green_weight_g"]), key=f"w{pid}", disabled=locked)
-        new_e = c3.toggle("EcoCure #2", value=bool(p["ecocure"]), key=f"e{pid}", disabled=locked,
+                                value=float(p["green_weight_g"]), key=fresh(f"w{pid}", float(p["green_weight_g"])),
+                                disabled=locked)
+        new_e = c3.toggle("EcoCure #2", value=bool(p["ecocure"]), key=fresh(f"e{pid}", bool(p["ecocure"])), disabled=locked,
                           help="Adds 1 % EcoCure #2 and lowers the salt by half its weight, "
                                "so total salt stays at 3 %.")
         if not locked:
@@ -670,7 +695,10 @@ def step_day0():
     counted = [l for l in lines if l["unit"] == "per_kg"]
     ver = p["spice_locked_at"] or ""
     # the key changes whenever the plan is rewritten, so unsaved edits never land on other rows
-    plan_id = f"{pid}{ver}{p['blend']}{p['ecocure']}{p['green_weight_g']}"
+    # ... and whenever saved amounts or notes change (another tab, a restore): a stale table must never
+    # write its old values back on Save or Done (full audit 27 Oct, #1)
+    saved = hash(tuple((l["actual"], l["note"]) for l in lines))
+    plan_id = f"{pid}{ver}{p['blend']}{p['ecocure']}{p['green_weight_g']}{saved}"
     ed_w = table(weighed, "%", "g", f"sw{plan_id}")
     ed_c = table(counted, "pcs / kg", "pcs", f"sc{plan_id}") if counted else None
 
@@ -815,7 +843,10 @@ def step_cure():
                 f'<div class="mark" style="left:calc({mark:.1f}% - 1px)" title="Planned end"></div></div>'
                 f'<div class="ends"><span style="left:0">{start:%d %b}</span>'
                 f'<span style="left:{mark:.1f}%; transform:translateX({"-100%" if mark > 80 else "-50%"})">'
-                f'▲ planned end {planned:%d %b}</span>'
+                f'▲ planned end {planned:%d %b}'
+                # near the right end the two labels would overlap: the bar's end goes into the same label
+                + (f' · {"out" if end_act else "today"} {run_to:%d %b}' if mark > 80 and run_to > planned else '')
+                + '</span>'
                 + ('' if mark > 80 else f'<span style="right:0">{max(planned, run_to):%d %b}</span>') + '</div>')
     st.markdown('<span class="cureband"></span>', unsafe_allow_html=True)   # marker for tests
     band([("Cure started", f"{start:%d %b %Y}", "into the bag"),
@@ -905,7 +936,7 @@ def save_weigh_in(r: dict, confirmed: bool = False) -> None:
                 db.add_photo(con, pid, rel, r["day"], r["note"] or f"Weigh-in {r['weight']:.0f} g",
                              rid, stage="dry")
     except (db.Locked, ValueError) as e:
-        st.error(str(e))
+        st.error(md(e))
         return
     st.session_state["flash"] = f"Saved {r['weight']:.0f} g on {r['day']:%d %b}"
     st.rerun()
@@ -994,6 +1025,41 @@ def weigh_in_climate() -> dict:
     return sensors.day_averages([d(r["day"]) for r in db.reading_rows(con, pid)], cr)
 
 
+QUARTERS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
+
+
+def left_out_periods(ch):
+    """Periods the sensor was out of the chamber, kept per chamber: applied to every import and hub sync
+    (full audit 27 Oct, #3), and can be added without uploading a file (#4)."""
+    ex = db.exclusions(con, ch["id"])
+    with st.expander(f"Left-out periods ({len(ex)})", key=f"exexp{pid}"):
+        st.caption("Times the sensor was out of the chamber (in the freezer, on the kitchen table). Readings "
+                   "in these periods are never stored, from any import or the hub sync. Adding one also "
+                   "removes readings already stored for it, except in finished drying periods.")
+        for e in ex:
+            c1, c2 = st.columns([4, 1], vertical_alignment="center")
+            a_, b_ = datetime.fromisoformat(e["start_ts"]), datetime.fromisoformat(e["end_ts"])
+            c1.markdown(f"{a_:%d %b %Y %H:%M} to {b_:%d %b %Y %H:%M}")
+            if c2.button("Remove", key=f"exdel{e['id']}", width="stretch",
+                         help="Readings removed earlier don't come back: import the file again"):
+                act(db.delete_exclusion, e["id"], success="Left-out period removed")
+        c1, c2, c3, c4 = st.columns(4)
+        # quarter-hour list, not st.time_input: that widget crashed on some browser locales
+        lo_d = c1.date_input("From", value=None, format="DD/MM/YYYY", key=f"lo_d{pid}")
+        lo_t = c2.selectbox("at", QUARTERS, index=0, key=f"lo_t{pid}")
+        hi_d = c3.date_input("To", value=None, format="DD/MM/YYYY", key=f"hi_d{pid}")
+        hi_t = c4.selectbox("at ", QUARTERS, index=len(QUARTERS) - 1, key=f"hi_t{pid}",
+                            help="Inclusive: a reading at exactly this time is left out too")
+        lo = datetime.combine(lo_d, datetime.strptime(lo_t, "%H:%M").time()) if lo_d else None
+        hi = datetime.combine(hi_d, datetime.strptime(hi_t, "%H:%M").time()) if hi_d else None
+        if lo and hi:
+            n_ = db.sensor_readings_between(con, ch["id"], lo, hi)
+            st.caption(f"{n_} readings stored for this period will be removed." if n_ else
+                       "No readings stored for this period yet.")
+        if st.button("Leave out this period", key=f"exadd{pid}", disabled=not (lo and hi)):
+            act(db.add_exclusion, ch["id"], lo, hi, success="Period left out")
+
+
 def chamber_section():
     """Temperature/humidity of the drying chamber: chart, import from the Tapo app, hub sync."""
     ch = con.execute("SELECT * FROM chamber WHERE id=?", (p["chamber_id"],)).fetchone()
@@ -1045,13 +1111,14 @@ def chamber_section():
                 color=colour, strokeWidth=1.6 if hrs else 1.2,
                 point=alt.OverlayMarkDef(color=colour, size=22) if hrs >= 12 else False).encode(
                 x=alt.X("Time:T", title=None),
-                y=alt.Y(f"{field}:Q", title=title, scale=alt.Scale(zero=False)),
+                y=alt.Y(f"{field}:Q", title=title, scale=alt.Scale(zero=False),
+                        axis=alt.Axis(format=fmt)),          # constant humidity showed "80.000000"
                 detail="seg:N", tooltip=tip))
             layers.append(alt.Chart(wdf).mark_rule(color=MUTED, strokeDash=[3, 3], strokeWidth=1).encode(
                 x="Time:T", tooltip=["Weigh-in:N"]))
             layers.append(alt.Chart(wdf.dropna(subset=[field])).mark_point(
                 color=INK, filled=True, size=45).encode(
-                x="Time:T", y=f"{field}:Q",
+                x="Time:T", y=alt.Y(f"{field}:Q", axis=alt.Axis(format=fmt)),
                 tooltip=["Weigh-in:N", alt.Tooltip(f"{field}:Q", title="day average", format=fmt)]))
             col.altair_chart(alt.layer(*layers).properties(height=220), width="stretch")
         st.caption(("Line: average per " + view + "; shaded: lowest to highest in that period. " if hrs else
@@ -1074,7 +1141,7 @@ def chamber_section():
         kinds = list(safety.KINDS)
         dry_done = bool(p["dry_locked_at"])
         new_kind = st.segmented_control(
-            "Type", kinds, default=KIND or ch["kind"] or "fridge", key=f"chkind{pid}", disabled=closed or dry_done,
+            "Type", kinds, default=KIND or ch["kind"] or "fridge", key=fresh(f"chkind{pid}", ch["kind"] or "fridge"), disabled=closed or dry_done,
             format_func=lambda k_: f"{safety.KINDS[k_]} (warn above {safety.TEMP_MAX[k_]:g} °C)",
             help="Sets which temperature rules apply to batches still drying in this chamber. "
                  "Batches whose drying is locked keep the type they had.")
@@ -1084,58 +1151,41 @@ def chamber_section():
             act(db.set_chamber_kind, ch["id"], new_kind, success=f"{md(ch['name'])} is now a {safety.KINDS[new_kind].lower()}")
         st.markdown("**Import from the Tapo app**")
         st.caption("In the Tapo app: sensor → History → View All → download icon → pick interval and range. "
-                   "Attach the file from the e-mail here. Importing the same period again replaces, never doubles.")
+                   "Attach the file from the e-mail here. Importing the same period again replaces, never doubles. "
+                   "If the sensor was out of the chamber, add that time under Left-out periods (below): "
+                   "it is skipped in this and every later import.")
         up = st.file_uploader("Tapo export", type=["csv", "xlsx", "xlsm"], key=f"tapo{pid}{st.session_state.get('tapo_n', 0)}",
                               label_visibility="collapsed")
         if up is not None:
             try:
                 parsed = sensors.parse_export(up.getvalue(), up.name)
             except ValueError as e:
-                st.error(str(e))
+                st.error(md(e))
                 parsed = None
             if parsed:
-                with st.expander("Leave out a period (sensor was out of the chamber)"):
-                    c1, c2, c3, c4 = st.columns(4)
-                    lo_d = c1.date_input("From", value=None, format="DD/MM/YYYY", key=f"lo_d{pid}")
-                    # quarter-hour list, not st.time_input: that widget crashed on some browser locales
-                    quarters = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
-                    lo_t = c2.selectbox("at", quarters, index=0, key=f"lo_t{pid}")
-                    hi_d = c3.date_input("To", value=None, format="DD/MM/YYYY", key=f"hi_d{pid}")
-                    hi_t = c4.selectbox("at ", quarters, index=len(quarters) - 1, key=f"hi_t{pid}",
-                                        help="Inclusive: a reading at exactly this time is left out too")
-                lo = datetime.combine(lo_d, datetime.strptime(lo_t, "%H:%M").time()) if lo_d else None
-                hi = datetime.combine(hi_d, datetime.strptime(hi_t, "%H:%M").time()) if hi_d else None
-                if lo and hi and hi < lo:
-                    st.error("'To' is before 'From'.")
-                    lo = hi = None
-                parsed.rows, left_out = sensors.leave_out(parsed.rows, lo, hi)
-                # readings already stored for that period are just as wrong: removed on import (audit #9)
-                stored_in_gap = db.sensor_readings_between(con, ch["id"], lo, hi) if lo and hi else 0
-                if left_out or stored_in_gap:
-                    st.caption(f"Leaving out {left_out} readings from {lo:%d %b %H:%M} to {hi:%d %b %H:%M}"
-                               + (f", and removing {stored_in_gap} already stored for that period "
-                                  "(Tapo import and hub sync; periods with locked drying are kept)"
-                                  if stored_in_gap else "") + ".")
-                if not parsed.rows:
-                    st.warning("Nothing left to import.")
-                    return
-                temps = [t for _, t, _ in parsed.rows if t is not None]
-                rhs = [h for _, _, h in parsed.rows if h is not None]
-                st.info(f"**{len(parsed.rows)} readings** to import, from {parsed.first:%d %b %Y %H:%M} to "
-                        f"{parsed.last:%d %b %Y %H:%M}"
-                        + (f"; temperature {min(temps):.1f} to {max(temps):.1f} °C" if temps else "")
-                        + (" (converted from °F)" if parsed.fahrenheit else "")
-                        + (f"; humidity {min(rhs):.0f} to {max(rhs):.0f} %" if rhs else "")
-                        + (f". {parsed.skipped} lines skipped." if parsed.skipped else "."))
-                if st.button(f"Import into {md(ch['name'])}", type="primary", key=f"tapoimp{pid}"):
-                    with con:
-                        stored, rejected, removed = sensors.import_export(con, ch["id"], parsed.rows, lo, hi)
-                    st.session_state["tapo_n"] = st.session_state.get("tapo_n", 0) + 1      # empty the uploader
-                    st.session_state["flash"] = (f"{stored} readings imported into {md(ch['name'])}"
-                                                 + (f", {rejected} out of range skipped" if rejected else "")
-                                                 + (f", {removed} stored earlier for the left-out period removed"
-                                                    if removed else ""))
-                    st.rerun()
+                rows_, n_ex, n_lk = sensors.protected(con, ch["id"], parsed.rows)
+                skip = "; ".join(x for x in (f"{n_ex} in left-out periods" if n_ex else "",
+                                             f"{n_lk} in finished drying periods" if n_lk else "") if x)
+                if not rows_:
+                    st.warning("Nothing new to import" + (f" ({skip} are skipped)." if skip else "."))
+                else:
+                    temps = [t for _, t, _ in rows_ if t is not None]
+                    rhs = [h for _, _, h in rows_ if h is not None]
+                    st.info(f"**{len(rows_)} readings** to import, from {rows_[0][0]:%d %b %Y %H:%M} to "
+                            f"{rows_[-1][0]:%d %b %Y %H:%M}"
+                            + (f"; temperature {min(temps):.1f} to {max(temps):.1f} °C" if temps else "")
+                            + (" (converted from °F)" if parsed.fahrenheit else "")
+                            + (f"; humidity {min(rhs):.0f} to {max(rhs):.0f} %" if rhs else "")
+                            + (f". Skipped: {skip}" if skip else "")
+                            + (f". {parsed.skipped} lines unreadable." if parsed.skipped else "."))
+                    if st.button(f"Import into {md(ch['name'])}", type="primary", key=f"tapoimp{pid}"):
+                        with con:
+                            res = sensors.import_export(con, ch["id"], parsed.rows)
+                        st.session_state["tapo_n"] = st.session_state.get("tapo_n", 0) + 1   # empty the uploader
+                        st.session_state["flash"] = (f"{res.stored} readings imported into {md(ch['name'])}"
+                                                     + (f", {res.rejected} out of range skipped" if res.rejected else ""))
+                        st.rerun()
+        left_out_periods(ch)
         counts = db.chamber_reading_counts(con, ch["id"])
         if counts:
             with st.expander("Remove readings (e.g. imported the wrong file)"):
@@ -1327,7 +1377,7 @@ def step_dry():
             st.error(f"The current target ({stored:g} %) is outside the allowed "
                      f"{safety.TARGET_MIN:g}-{safety.TARGET_MAX:g} %. Set a new one.")
         nt = c1.number_input("Target loss [%]", min_value=safety.TARGET_MIN, max_value=safety.TARGET_MAX,
-                             disabled=d_locked, step=0.5, key=f"tgt{pid}",
+                             disabled=d_locked, step=0.5, key=fresh(f"tgt{pid}", stored),
                              value=min(max(stored, safety.TARGET_MIN), safety.TARGET_MAX),
                              help=f"Allowed {safety.TARGET_MIN:g}-{safety.TARGET_MAX:g} %. " "Measured on the meat at the start of drying: start weight minus packaging.")
         # a stored out-of-range target shows its one error above; the clamped default adds no second message
@@ -1346,10 +1396,18 @@ def step_dry():
         c1, c2, _ = st.columns([1.2, 2.2, 3], vertical_alignment="bottom")
         de = c1.date_input("Drying ended", value=d(p["dry_end"]) or db.today(), format="DD/MM/YYYY", key=f"de{pid}")
 
+        short = db.below_target(con, pid)
+        short_ok = False
+        if short:
+            st.warning(f"The last weigh-in is at {short[0]:.1f} % weight loss, below the {short[1]:g} % target. "
+                       "Ending now is your choice; it is noted in the history and in the PDF.")
+            short_ok = st.checkbox("End drying below the target", key=f"dshort{pid}")
+
         def note_and_lock(con_, pid_):
             db.set_dry_note(con_, pid_, note.strip())
-            db.lock_dry(con_, pid_, de)
-        if c2.button("Done: lock drying and finish", type="primary", key=f"dlk{pid}", width="stretch"):
+            db.lock_dry(con_, pid_, de, below_target_ok=short_ok)
+        if c2.button("Done: lock drying and finish", type="primary", key=f"dlk{pid}", width="stretch",
+                     disabled=bool(short) and not short_ok):
             act(note_and_lock, pid, success="Drying locked", goto="finish")
     else:
         st.caption(f"Drying ended {fmt_date(p['dry_end'])}.")
@@ -1378,6 +1436,8 @@ def step_finish():
               ("Cure", f"{cure_days} days" if cure_days is not None else "–", "in the bag"),
               ("Drying", f"{dry_days} days", "so far" if not p["dry_end"] else "wrapped and netted"),
               ("Total", f"{total_days} days", "from day 0")])
+        if p["dry_end"] and (short := db.below_target(con, pid)):
+            st.warning(safety.below_target_message(*short))
     else:
         st.info("The result appears here once drying has started.")
 
@@ -1394,7 +1454,7 @@ def step_finish():
         st.success(f"Closed on {fmt_date(p['closed_at'][:10])}. This project is read-only.")
         if p["final_notes"]:
             blk("Final notes")
-            st.write(p["final_notes"])
+            st.markdown(md_text(p["final_notes"]))
     else:
         blk("Close the batch")
         missing = db.close_problems(con, pid)

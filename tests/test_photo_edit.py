@@ -59,7 +59,7 @@ def test_caption_can_be_changed_and_cleared(env):
 def test_closed_project_keeps_its_photos(env):
     ph, rel = add(env)
     with env:
-        db.lock_dry(env, 1, date(2026, 10, 8))
+        db.lock_dry(env, 1, date(2026, 10, 8), below_target_ok=True)
         db.close_project(env, 1)
     with pytest.raises(db.Locked):
         db.delete_photo(env, ph)

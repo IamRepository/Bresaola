@@ -30,7 +30,7 @@ def drying_batch(con, *, lock_dry=False):
     db.add_reading(con, pid, date(2026, 9, 26), 2057)
     db.add_reading(con, pid, date(2026, 9, 30), 2026)
     if lock_dry:
-        db.lock_dry(con, pid, date(2026, 10, 1))
+        db.lock_dry(con, pid, date(2026, 10, 1), below_target_ok=True)
     return pid
 
 
@@ -44,9 +44,9 @@ def drying_batch(con, *, lock_dry=False):
 def test_drying_end_date_is_checked(con, end, msg):
     pid = drying_batch(con)
     with pytest.raises(ValueError, match=msg):
-        db.lock_dry(con, pid, end)
+        db.lock_dry(con, pid, end, below_target_ok=True)
     assert not db.project(con, pid)["dry_locked_at"]
-    db.lock_dry(con, pid, date(2026, 9, 30))           # last weigh-in day is fine
+    db.lock_dry(con, pid, date(2026, 9, 30), below_target_ok=True)           # last weigh-in day is fine
 
 
 # ---- 4: earlier steps cannot be changed behind a later one -----------------------------

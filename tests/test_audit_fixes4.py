@@ -84,9 +84,8 @@ def test_leave_out_removes_earlier_imports(env):
     with env:
         sensors.import_readings(env, ch, bad, "tapo_export")          # the wrong import, without leave-out
         db.add_chamber_reading(env, ch, "2026-10-04T08:00:00", 21.0, 40, source="tapo_api")
-        stored, rejected, removed = sensors.import_export(
-            env, ch, bad, datetime(2026, 10, 3, 12, 15), datetime(2026, 10, 9, 4, 0))
-    assert (stored, removed) == (1, 2)
+        res = sensors.import_export(env, ch, bad, datetime(2026, 10, 3, 12, 15), datetime(2026, 10, 9, 4, 0))
+    assert (res.stored, res.removed) == (1, 2)
     assert [ts for ts, _ in rows(env, ch) if ts.startswith("2026-10-0")] == ["2026-10-09T12:00:00"]
 
 
@@ -145,5 +144,5 @@ def test_leave_out_count_skips_locked_drying(env):
     with env:
         sensors.import_readings(env, ch, [(datetime(2026, 10, 3, 13), 2.0, 80.0),
                                           (datetime(2026, 10, 10, 13), 2.0, 80.0)], "tapo_export")
-        db.lock_dry(env, 1, date(2026, 10, 8))                          # 3 Oct is inside the locked period
+        db.lock_dry(env, 1, date(2026, 10, 8), below_target_ok=True)                          # 3 Oct is inside the locked period
     assert db.sensor_readings_between(env, ch, datetime(2026, 10, 1), datetime(2026, 10, 11)) == 1

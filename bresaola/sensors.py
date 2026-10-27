@@ -232,16 +232,43 @@ def import_readings(con, chamber_id: int, rows, source: str) -> tuple[int, int]:
     return stored, rejected
 
 
-def import_export(con, chamber_id: int, rows, lo: datetime | None = None, hi: datetime | None = None):
-    """Import a Tapo export. With a leave-out period (lo..hi, inclusive), sensor readings already stored
-    for that period are removed too: the sensor was out of the chamber, whichever way they arrived
-    (audit 26 Oct, #9). Readings inside locked drying periods are kept. Returns (stored, rejected, removed)."""
-    removed = 0
+@dataclass
+class ImportResult:
+    stored: int = 0
+    rejected: int = 0          # outside the plausible range
+    removed: int = 0           # stored earlier, inside the new left-out period
+    left_out: int = 0          # inside a saved left-out period
+    locked: int = 0            # inside a finished (locked) drying period
+
+
+def protected(con, chamber_id: int, rows):
+    """Drop readings that must not be stored: inside a saved left-out period, or inside a drying period
+    that is locked (finished batches keep their readings and warnings). Returns (rows, left_out, locked)."""
+    ex = [(datetime.fromisoformat(e["start_ts"]), datetime.fromisoformat(e["end_ts"])) for e in db.exclusions(con, chamber_id)]
+    lk = [(datetime.fromisoformat(r["dry_start"]), datetime.fromisoformat(r["dry_end"] + "T23:59:59"))
+          for r in db.locked_periods(con, chamber_id)]
+    kept, n_ex, n_lk = [], 0, 0
+    for row in rows:
+        t = row[0]
+        if any(a <= t <= b for a, b in ex):
+            n_ex += 1
+        elif any(a <= t <= b for a, b in lk):
+            n_lk += 1
+        else:
+            kept.append(row)
+    return kept, n_ex, n_lk
+
+
+def import_export(con, chamber_id: int, rows, lo: datetime | None = None, hi: datetime | None = None) -> ImportResult:
+    """Import a Tapo export. A leave-out period (lo..hi, inclusive) is saved for the chamber: readings
+    already stored for it are removed (audit 26 Oct, #9), and it applies to every later import and hub
+    sync (full audit 27 Oct, #3). Nothing is stored inside saved left-out or locked drying periods."""
+    res = ImportResult()
     if lo and hi:
-        for src in db.SENSOR_SOURCES:
-            removed += db.delete_chamber_readings(con, chamber_id, src, lo, hi)[0]
-    stored, rejected = import_readings(con, chamber_id, leave_out(rows, lo, hi)[0], "tapo_export")
-    return stored, rejected, removed
+        res.removed = db.add_exclusion(con, chamber_id, lo, hi)
+    rows, res.left_out, res.locked = protected(con, chamber_id, rows)
+    res.stored, res.rejected = import_readings(con, chamber_id, rows, "tapo_export")
+    return res
 
 
 WEIGH_IN_TIME = time(12, 0)          # weigh-ins have a date only; shown at noon on the charts

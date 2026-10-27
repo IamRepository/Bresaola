@@ -256,6 +256,9 @@ def test_drying_start_editable(app, tmp_path):
 
 
 def test_dry_done_jumps_to_finish_and_blocks_weigh_ins(app, tmp_path):
+    assert btn(app, "Done: lock drying and finish").disabled        # demo is below target: confirm first
+    next(c for c in app.checkbox if c.label == "End drying below the target").check()
+    app.run()
     btn(app, "Done: lock drying and finish").click()
     app.run(); ok(app)
     p = project(tmp_path)

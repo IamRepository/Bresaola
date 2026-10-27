@@ -17,6 +17,14 @@ from zoneinfo import ZoneInfo
 from . import calc
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS chamber_exclusion (  -- v0.4.9: "leave out" periods, kept for every later import
+    id          INTEGER PRIMARY KEY,
+    chamber_id  INTEGER NOT NULL REFERENCES chamber(id) ON DELETE CASCADE,
+    start_ts    TEXT NOT NULL,              -- ISO datetime, inclusive
+    end_ts      TEXT NOT NULL,              -- ISO datetime, inclusive
+    created_at  TEXT,
+    UNIQUE (chamber_id, start_ts, end_ts)
+);
 CREATE TABLE IF NOT EXISTS meta (           -- small settings; v0.4.8: highest project id ever used
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -262,6 +270,28 @@ _OUTSIDE_LOCKED = """NOT EXISTS (SELECT 1 FROM project p WHERE p.chamber_id = ch
 
 
 SENSOR_SOURCES = ("tapo_export", "tapo_api")       # readings from the sensor (not typed in with weigh-ins)
+
+
+def add_exclusion(con, chamber_id: int, start, end) -> int:
+    """Remember a period the sensor was out of the chamber: its readings are left out of every later
+    import and hub sync (full audit 27 Oct, #3), and sensor readings already stored for it are removed
+    (except inside locked drying periods). Returns how many were removed."""
+    if end < start:
+        raise ValueError("'To' is before 'From'")
+    removed = sum(delete_chamber_readings(con, chamber_id, src, start, end)[0] for src in SENSOR_SOURCES)
+    con.execute("INSERT OR IGNORE INTO chamber_exclusion (chamber_id, start_ts, end_ts, created_at) VALUES (?,?,?,?)",
+                (chamber_id, _iso(start), _iso(end), _now()))
+    return removed
+
+
+def exclusions(con, chamber_id: int) -> list[sqlite3.Row]:
+    return con.execute("SELECT * FROM chamber_exclusion WHERE chamber_id=? ORDER BY start_ts",
+                       (chamber_id,)).fetchall()
+
+
+def delete_exclusion(con, exclusion_id: int) -> None:
+    """Stop leaving a period out. Readings removed earlier don't come back: import the file again."""
+    con.execute("DELETE FROM chamber_exclusion WHERE id=?", (exclusion_id,))
 
 
 def sensor_readings_between(con, chamber_id: int, start, end) -> int:
@@ -539,8 +569,18 @@ def set_dry_note(con, pid: int, note: str | None) -> None:
     con.execute("UPDATE project SET dry_note=? WHERE id=?", (note or None, pid))
 
 
-def lock_dry(con, pid: int, end_day) -> None:
-    """Drying finished: record the end date and lock weigh-ins and settings."""
+def below_target(con, pid: int) -> tuple[float, float] | None:
+    """(loss %, target %) if the latest weigh-in hasn't reached the target yet, else None."""
+    p = project(con, pid)
+    if not p["dry_start"] or not readings(con, pid):
+        return None
+    s = drying_status(con, pid)
+    return None if s["progress"] >= 1 else (s["loss_pct"], float(p["target_loss_pct"]))
+
+
+def lock_dry(con, pid: int, end_day, below_target_ok: bool = False) -> None:
+    """Drying finished: record the end date and lock weigh-ins and settings.
+    Ending below the target weight loss must be confirmed, and is logged (full audit 27 Oct, #2)."""
     _require_open(con, pid)
     p = project(con, pid)
     if not p["dry_start"]:
@@ -555,10 +595,15 @@ def lock_dry(con, pid: int, end_day) -> None:
         raise ValueError(f"The end date is before the last weigh-in ({date.fromisoformat(last):%d %b %Y})")
     if end > today():
         raise ValueError("The end date is in the future")
+    short = below_target(con, pid)
+    if short and not below_target_ok:
+        raise ValueError(f"The last weigh-in is at {short[0]:.1f} % weight loss, below the {short[1]:g} % "
+                         "target. Tick 'End drying below the target' to lock anyway.")
     kind = chamber_kind(con, p) if p["chamber_id"] else None
     con.execute("UPDATE project SET dry_end=?, dry_locked_at=?, dry_kind=? WHERE id=?",
                 (_iso(end_day), _now(), kind, pid))
-    log(con, pid, "dry_locked", f"ended {_iso(end_day)}")
+    log(con, pid, "dry_locked", f"ended {_iso(end_day)}"
+        + (f"; below target: {short[0]:.1f} % of {short[1]:g} %, confirmed" if short else ""))
 
 
 def unlock_dry(con, pid: int, reason: str) -> None:
@@ -839,6 +884,7 @@ def delete_chamber(con, chamber_id: int) -> int:
     if used:
         raise ValueError("Still used by: " + ", ".join(r["name"] for r in used))
     n = con.execute("DELETE FROM chamber_reading WHERE chamber_id=?", (chamber_id,)).rowcount
+    con.execute("DELETE FROM chamber_exclusion WHERE chamber_id=?", (chamber_id,))
     if not con.execute("DELETE FROM chamber WHERE id=?", (chamber_id,)).rowcount:
         raise ValueError("That chamber no longer exists")
     return n

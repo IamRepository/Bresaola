@@ -73,6 +73,12 @@ def target_message(pct: float, hint: bool = True) -> str | None:
     return target_warning(pct)
 
 
+def below_target_message(loss_pct: float, target_pct: float) -> str:
+    """Drying ended before the target weight loss (full audit 27 Oct, #2)."""
+    return (f"Drying ended at {loss_pct:.1f} % weight loss, below the {target_pct:g} % target: the meat may "
+            "be less dry, and less shelf-stable, than planned.")
+
+
 def cure_length(actual_days: int, minimum_days: float, planned_days: int) -> str:
     """'ok' (reached the planned days), 'short' (past the calculator minimum but not the +20 % margin)
     or 'below_min' (shorter than the calculator minimum: salt may not have reached the centre)."""
