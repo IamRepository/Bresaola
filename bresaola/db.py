@@ -17,6 +17,10 @@ from zoneinfo import ZoneInfo
 from . import calc
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS meta (           -- small settings; v0.4.8: highest project id ever used
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS chamber (
@@ -176,6 +180,8 @@ def connect(path: str | Path) -> sqlite3.Connection:
                                 "WHERE equalise_end IS NOT NULL")
     con.execute("UPDATE project SET start_date = substr(created_at, 1, 10) WHERE start_date IS NULL")
     con.execute("UPDATE chamber SET kind = 'fridge' WHERE kind IS NULL")   # all chambers so far were fridges
+    con.execute("""INSERT OR IGNORE INTO meta (key, value)
+                   SELECT 'last_project_id', CAST(COALESCE(MAX(id), 0) AS TEXT) FROM project""")
     # finished drying keeps the chamber type it had (v0.4.3): later changes to the chamber don't rewrite it
     con.execute("""UPDATE project SET dry_kind = (SELECT kind FROM chamber WHERE chamber.id = project.chamber_id)
                    WHERE dry_locked_at IS NOT NULL AND dry_kind IS NULL AND chamber_id IS NOT NULL""")
@@ -309,6 +315,14 @@ def _check_name_free(con, name: str, except_id: int | None = None) -> None:
         raise ValueError(f"A project called '{name}' already exists. Pick another name.")
 
 
+def _next_project_id(con) -> int:
+    """Never reuse the number of a deleted project: screen settings (open step, typed text) are kept per
+    number and would carry over to the new project (audit 26 Oct, #18)."""
+    top = con.execute("SELECT COALESCE(MAX(id), 0) FROM project").fetchone()[0]
+    row = con.execute("SELECT value FROM meta WHERE key='last_project_id'").fetchone()
+    return max(top, int(row[0]) if row else 0) + 1
+
+
 def create_project(con, name: str, blend: str, ecocure: bool, green_weight_g: float,
                    start_date=None) -> int:
     """New project with a snapshot of the blend's rates and planned amounts."""
@@ -319,10 +333,11 @@ def create_project(con, name: str, blend: str, ecocure: bool, green_weight_g: fl
     if start_date and date.fromisoformat(_iso(start_date)) > today():
         raise ValueError("The start date is in the future. Day 0 is the day the meat was spiced and bagged.")
     rates = calc.blend_rates(blend)
-    pid = con.execute("""INSERT INTO project (name, created_at, start_date, blend, ecocure, green_weight_g)
-                         VALUES (?,?,?,?,?,?)""",
-                      (name, _now(), _iso(start_date or today()), blend, int(ecocure),
-                       green_weight_g)).lastrowid
+    pid = _next_project_id(con)
+    con.execute("""INSERT INTO project (id, name, created_at, start_date, blend, ecocure, green_weight_g)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (pid, name, _now(), _iso(start_date or today()), blend, int(ecocure), green_weight_g))
+    con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('last_project_id', ?)", (str(pid),))
     _write_plan(con, pid, green_weight_g, ecocure, rates)
     log(con, pid, "created", f"{blend}, {green_weight_g} g, EcoCure {'yes' if ecocure else 'no'}")
     return pid
@@ -809,6 +824,24 @@ def photos(con, pid: int, stage: str | None = None) -> list[sqlite3.Row]:
                            (pid,)).fetchall()
     return con.execute("SELECT * FROM photo WHERE project_id=? AND stage=? ORDER BY taken_at, id",
                        (pid, stage)).fetchall()
+
+
+def unused_chambers(con) -> list[sqlite3.Row]:
+    """Chambers no project points to (e.g. after deleting the project), with their reading counts."""
+    return con.execute("""SELECT c.*, (SELECT COUNT(*) FROM chamber_reading r WHERE r.chamber_id = c.id) AS n
+                          FROM chamber c WHERE NOT EXISTS (SELECT 1 FROM project p WHERE p.chamber_id = c.id)
+                          ORDER BY c.name""").fetchall()
+
+
+def delete_chamber(con, chamber_id: int) -> int:
+    """Delete a chamber nobody uses, with its readings (audit 26 Oct, #19). Returns readings removed."""
+    used = con.execute("SELECT name FROM project WHERE chamber_id=?", (chamber_id,)).fetchall()
+    if used:
+        raise ValueError("Still used by: " + ", ".join(r["name"] for r in used))
+    n = con.execute("DELETE FROM chamber_reading WHERE chamber_id=?", (chamber_id,)).rowcount
+    if not con.execute("DELETE FROM chamber WHERE id=?", (chamber_id,)).rowcount:
+        raise ValueError("That chamber no longer exists")
+    return n
 
 
 def chambers(con) -> list[sqlite3.Row]:

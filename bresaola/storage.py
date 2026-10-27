@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import shutil
 import sqlite3
 import uuid
@@ -99,12 +100,21 @@ def delete_project_photos(project_id: int) -> None:
     shutil.rmtree(data_dir() / PHOTO_DIR / str(project_id), ignore_errors=True)
 
 
+PHOTO_PATH = re.compile(r"photos/\d+/[^/\\]+")       # how save_photo stores them: photos/<project>/<file>
+
+
+def _inside_photos(rel: str) -> Path | None:
+    """The photo's file, or None if the path points anywhere outside data/photos (audit 26 Oct, #16)."""
+    root = (data_dir() / PHOTO_DIR).resolve()
+    f = (data_dir() / (rel or "")).resolve()
+    return f if root in f.parents else None
+
+
 def delete_photo_file(rel: str) -> bool:
     """Delete one stored photo. Only files inside the photos folder are touched, whatever the
     database says. Returns True if a file was removed."""
-    root = (data_dir() / PHOTO_DIR).resolve()
-    f = (data_dir() / rel).resolve()
-    if root not in f.parents or not f.is_file():
+    f = _inside_photos(rel)
+    if f is None or not f.is_file():
         return False
     try:
         f.unlink()
@@ -114,7 +124,9 @@ def delete_photo_file(rel: str) -> bool:
 
 
 def photo_file(rel: str) -> Path:
-    return data_dir() / rel
+    """Where a photo is stored. A path outside data/photos (only possible from a tampered database)
+    gives a file that doesn't exist, so the app and the PDF show "missing" instead of reading it."""
+    return _inside_photos(rel) or data_dir() / PHOTO_DIR / ".outside-photos-folder"
 
 
 def make_backup() -> bytes:
@@ -147,6 +159,9 @@ def _check_backup_db(path: Path) -> None:
             if con.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise ValueError("The database in this backup is damaged")
             tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            bad = ([r[0] for r in con.execute("SELECT path FROM photo")
+                    if not (isinstance(r[0], str) and PHOTO_PATH.fullmatch(r[0]) and ".." not in r[0])]
+                   if "photo" in tables else [])
         finally:
             con.close()
     except sqlite3.DatabaseError:
@@ -154,6 +169,9 @@ def _check_backup_db(path: Path) -> None:
     missing = REQUIRED_TABLES - tables
     if missing:
         raise ValueError("Not a Bresaola backup: missing " + ", ".join(sorted(missing)))
+    if bad:
+        raise ValueError(f"This backup's database has photo paths outside the photos folder (e.g. {bad[0]!r}); "
+                         "not restored")
 
 
 def restore_backup(data: bytes) -> None:

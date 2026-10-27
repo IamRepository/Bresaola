@@ -88,6 +88,24 @@ class Result:
     error: str | None = None
 
 
+def _norm(name: str) -> str:
+    return " ".join(name.split()).casefold()
+
+
+def find_chamber(con, name: str) -> tuple[int | None, str | None]:
+    """(chamber id, None) for the chamber called `name`, ignoring capitals and extra spaces.
+    No match while chambers exist: (None, error) - never a silent new chamber (audit 26 Oct, #20).
+    No chambers at all yet: creates the first one."""
+    rows = db.chambers(con)
+    for r in rows:
+        if _norm(r["name"]) == _norm(name):
+            return r["id"], None
+    if rows:
+        return None, (f"no chamber called '{name}' (TAPO_SENSORS). Existing: "
+                      + ", ".join(r["name"] for r in rows) + ". Fix the name in .env; nothing stored.")
+    return db.get_or_create_chamber(con, name.strip(), "Tapo T31x via H100"), None
+
+
 def sync(con, client_factory=None) -> list[Result]:
     """Fetch every configured sensor and store its readings under its chamber."""
     pairs = sensor_map()
@@ -101,7 +119,9 @@ def sync(con, client_factory=None) -> list[Result]:
     for r in results:
         rows = data.get(r.sensor, [])
         with con:
-            ch_id = db.get_or_create_chamber(con, r.chamber, f"Tapo T31x '{r.sensor}' via H100")
+            ch_id, r.error = find_chamber(con, r.chamber)
+            if ch_id is None:
+                continue
             r.stored, r.rejected = sensors.import_readings(con, ch_id, rows, SOURCE)
         if rows:
             r.first, r.last = rows[0][0], rows[-1][0]

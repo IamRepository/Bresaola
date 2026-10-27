@@ -9,7 +9,9 @@ Run:  streamlit run app.py
 """
 from __future__ import annotations
 
+import html
 import os
+import re
 import sqlite3
 from datetime import date, datetime, time, timedelta
 
@@ -149,7 +151,19 @@ def act(fn, *a, success: str | None = None, goto: str | None = None, **kw):
 
 
 def blk(title: str):
-    st.markdown(f'<div class="blk">{title}</div>', unsafe_allow_html=True)
+    """Section title. Plain text only: escaped, so a name like "Fridge <old>" shows as typed (audit #12)."""
+    st.markdown(f'<div class="blk">{html.escape(title)}</div>', unsafe_allow_html=True)
+
+
+# characters that format text in the middle of a line (-, #, + and 1. only do so at the start of one,
+# and a name never starts a line here)
+_MD_SPECIAL = re.compile(r"([\\`*_\[\]|~<>$:])")
+
+
+def md(s) -> str:
+    """User text (project or chamber names) inside Markdown: shown exactly as typed, e.g. My_test_batch
+    stays upright and :red[x] stays literal (audit #14)."""
+    return _MD_SPECIAL.sub(r"\\\1", str(s))
 
 
 def band(cells: list[tuple[str, str, str]], cols: int = 3, extra: str = ""):
@@ -212,14 +226,14 @@ with st.sidebar:
                 act(db.set_start_date, pid, new_start, success="Start date changed")
             st.markdown('<hr class="pop-sep"><p class="pop-h">Delete</p>', unsafe_allow_html=True)
             st.caption("Removes the project, its weigh-ins and photos for good. Download a backup first.")
-            confirm = st.text_input(f"Type **{sp['name']}** to confirm", key=f"del{pid}")
+            confirm = st.text_input(f"Type **{md(sp['name'])}** to confirm", key=f"del{pid}")
             if st.button("Delete project permanently", disabled=confirm.strip() != sp["name"],
                          key=f"delb{pid}", width="stretch"):
                 with con:
                     db.delete_project(con, pid)
                 storage.delete_project_photos(pid)
                 st.session_state.pop("pid_next", None)          # falls back to the first project
-                st.session_state["flash"] = f"Deleted {sp['name']}"
+                st.session_state["flash"] = f"Deleted {md(sp['name'])}"
                 st.rerun()
     else:
         pid = None
@@ -282,6 +296,14 @@ with st.sidebar:
                 except Exception as e:
                     st.session_state["flash_error"] = f"Restore failed, your data is unchanged: {e}"
                 st.rerun()
+        if unused := db.unused_chambers(con):           # left over from deleted projects (audit #19)
+            with st.popover(f"Unused chambers ({len(unused)})", width="stretch"):
+                st.caption("Drying chambers no project uses. Deleting one removes its readings too.")
+                for c in unused:
+                    st.markdown(f"**{md(c['name'])}**: {c['n']} readings")
+                    ok_ = st.checkbox("Delete it and its readings", key=f"chdelok{c['id']}")
+                    if st.button("Delete chamber", key=f"chdel{c['id']}", disabled=not ok_, width="stretch"):
+                        act(db.delete_chamber, c["id"], success=f"Chamber {md(c['name'])} deleted")
     if storage.is_test_mode():
         with st.container(key="testmode"):
             st.warning("**Test mode.** Nothing here is stored permanently. Use *Download backup* "
@@ -302,7 +324,7 @@ if pid is None:
 
 p = db.project(con, pid)
 closed = p["status"] == "closed"
-st.header(db.display_name(p))
+st.header(md(db.display_name(p)))
 facts = [p["blend"], f"{p['green_weight_g']:.0f} g raw meat after trimming",
          "EcoCure #2" if p["ecocure"] else "no EcoCure", f"started {d(p['start_date']):%d %b %Y}"]
 if closed:
@@ -932,7 +954,7 @@ def step_dry_start():
                 st.error("Choose the new chamber's type: fridge or curing chamber. It sets the temperature rules.")
                 return
             if ch_name == "+ New chamber" and ch_label in names:
-                st.error(f"A chamber called {ch_label} already exists: pick it in the list, or use another name.")
+                st.error(f"A chamber called {md(ch_label)} already exists: pick it in the list, or use another name.")
                 return
 
             def start_drying(con_, pid_):          # one transaction: no stray chamber if drying fails
@@ -1058,7 +1080,7 @@ def chamber_section():
         if dry_done:
             st.caption("Drying is locked, so this batch keeps its chamber type. Unlock drying to change it.")
         elif new_kind and new_kind != (ch["kind"] or "fridge"):
-            act(db.set_chamber_kind, ch["id"], new_kind, success=f"{ch['name']} is now a {safety.KINDS[new_kind].lower()}")
+            act(db.set_chamber_kind, ch["id"], new_kind, success=f"{md(ch['name'])} is now a {safety.KINDS[new_kind].lower()}")
         st.markdown("**Import from the Tapo app**")
         st.caption("In the Tapo app: sensor → History → View All → download icon → pick interval and range. "
                    "Attach the file from the e-mail here. Importing the same period again replaces, never doubles.")
@@ -1104,11 +1126,11 @@ def chamber_section():
                         + (" (converted from °F)" if parsed.fahrenheit else "")
                         + (f"; humidity {min(rhs):.0f} to {max(rhs):.0f} %" if rhs else "")
                         + (f". {parsed.skipped} lines skipped." if parsed.skipped else "."))
-                if st.button(f"Import into {ch['name']}", type="primary", key=f"tapoimp{pid}"):
+                if st.button(f"Import into {md(ch['name'])}", type="primary", key=f"tapoimp{pid}"):
                     with con:
                         stored, rejected, removed = sensors.import_export(con, ch["id"], parsed.rows, lo, hi)
                     st.session_state["tapo_n"] = st.session_state.get("tapo_n", 0) + 1      # empty the uploader
-                    st.session_state["flash"] = (f"{stored} readings imported into {ch['name']}"
+                    st.session_state["flash"] = (f"{stored} readings imported into {md(ch['name'])}"
                                                  + (f", {rejected} out of range skipped" if rejected else "")
                                                  + (f", {removed} stored earlier for the left-out period removed"
                                                     if removed else ""))
@@ -1126,15 +1148,15 @@ def chamber_section():
                 locked = db.locked_periods(con, ch["id"])
                 if locked:
                     st.caption("Kept in any case, because their drying is locked: " + "; ".join(
-                        f"{r['name']} ({fmt_date(r['dry_start'])} to {fmt_date(r['dry_end'])})" for r in locked) + ".")
+                        f"{md(r['name'])} ({fmt_date(r['dry_start'])} to {fmt_date(r['dry_end'])})" for r in locked) + ".")
                 sure = st.checkbox("Remove them. This applies to the whole chamber, so every project still drying in "
-                                   f"{ch['name']} loses these readings.", key=f"rm_ok{pid}")
+                                   f"{md(ch['name'])} loses these readings.", key=f"rm_ok{pid}")
                 if st.button("Remove readings", disabled=not sure, key=f"rm_b_{pid}"):
                     with con:
                         n, kept = db.delete_chamber_readings(con, ch["id"], src,
                                                              datetime.combine(rm_a, time.min) if rm_a else None,
                                                              datetime.combine(rm_b, time(23, 59, 59)) if rm_b else None)
-                    st.session_state["flash"] = (f"Removed {n} readings from {ch['name']}"
+                    st.session_state["flash"] = (f"Removed {n} readings from {md(ch['name'])}"
                                                  + (f"; kept {kept} from locked drying periods" if kept else "")
                                                  + ". Import the right file now.")
                     st.rerun()
@@ -1144,11 +1166,11 @@ def chamber_section():
             if st.button("Sync last 24 h from hub", key=f"tapohub{pid}"):
                 with st.spinner("Reading the hub..."):
                     res = tapo_sync.sync(con)
-                errs = [f"{r.chamber}: {r.error}" for r in res if r.error]
+                errs = [f"{md(r.chamber)}: {md(r.error)}" for r in res if r.error]
                 if errs:
                     st.session_state["flash_error"] = "Hub sync failed. " + "; ".join(errs)
                 else:
-                    st.session_state["flash"] = "; ".join(f"{r.chamber}: {r.stored} readings" for r in res)
+                    st.session_state["flash"] = "; ".join(f"{md(r.chamber)}: {r.stored} readings" for r in res)
                 st.rerun()
 
 

@@ -25,7 +25,9 @@ WAIT=${WAIT:-30}                     # health checks, 10 s apart
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOG"; }
 git_() { git -c safe.directory="$APP" -C "$APP" "$@"; }   # files belong to the DSM user, the task runs as root
-export GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+# LogLevel=ERROR: no "Permanently added ... to the list of known hosts" lines in the nightly mail
+export GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR"
+export BUILDX_GIT_INFO=false         # the builder's own git call can't read the folder as root: harmless warning
 
 compose() {
     if docker compose version >/dev/null 2>&1; then docker compose -p bresaola "$@"
@@ -42,7 +44,8 @@ healthy() {
 }
 
 deploy() {                           # check out commit $1, rebuild, restart
-    git_ reset -q --hard "$1" && (cd "$APP" && compose up -d --build) >>"$LOG" 2>&1
+    # quiet build: the log shows build output only when something fails
+    git_ reset -q --hard "$1" && (cd "$APP" && compose build --quiet && compose up -d) >>"$LOG" 2>&1
 }
 
 repo_version() { grep -o '[0-9][0-9.]*' "$APP/bresaola/__init__.py" | head -1; }

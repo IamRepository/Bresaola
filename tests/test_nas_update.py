@@ -82,7 +82,8 @@ def test_first_run_turns_zip_folder_into_checkout_and_keeps_data(nas):
     assert (nas.app / "data" / "bresaola.sqlite").read_bytes() == b"REAL DATA"
     assert (nas.app / ".env").read_text() == "TAPO_PASSWORD=secret\n"
     assert list((nas.app / "data" / "pre-update").glob("bresaola-*.sqlite"))      # copy before the first deploy
-    assert "compose -p bresaola up -d --build" in (nas.tmp / "docker.log").read_text()
+    calls = (nas.tmp / "docker.log").read_text()
+    assert "compose -p bresaola build --quiet" in calls and "compose -p bresaola up -d" in calls
 
 
 def test_nothing_new_does_nothing(nas):
