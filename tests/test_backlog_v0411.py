@@ -71,7 +71,7 @@ def test_weigh_in_table_left_aligned(env):
     at = dry(env)
     df = next(d for d in at.dataframe if "Weight [g]" in d.value.columns)
     cfg = json.loads(df.proto.columns)
-    for col in ("Date", "Day", "Weight [g]", "Lost [%]", "Day °C", "Note"):
+    for col in ("Date", "Day", "Weight [g]", "Lost [%]", "Day °C", "Footnote"):
         assert cfg[col]["alignment"] == "left", (col, cfg[col])
 
 

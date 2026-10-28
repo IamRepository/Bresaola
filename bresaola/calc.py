@@ -186,6 +186,11 @@ class Eta:
     eta_date: date
 
 
+def target_label(target_gross_g: float, target_loss_pct: float) -> str:
+    """Text on the chart's target line."""
+    return f"Target {target_gross_g:.0f} g · {target_loss_pct:g} % weight loss"
+
+
 RECENT_DAYS = 21        # the finish estimate uses the pace of the last 3 weeks ...
 RECENT_MIN_POINTS = 3   # ... but at least the last 3 weigh-ins
 

@@ -1374,10 +1374,19 @@ def step_dry():
         tooltip=[alt.Tooltip("Date:T", format="%d %b %Y"), "Weight (g):Q"])
     target = alt.Chart(pd.DataFrame({"t": [s["target_gross_g"]]})).mark_rule(
         strokeDash=[6, 4], color=INK).encode(y=alt.Y("t:Q", title="Weight incl. wrap + net [g]"))
+    # label on the target line (owner, 28 Oct), at the left end: the weight is highest there, so the
+    # data line never runs through the text
+    tlabel = alt.Chart(pd.DataFrame({"Date": [rdf["Date"].min()], "t": [s["target_gross_g"]],
+                                     "label": [calc.target_label(s["target_gross_g"], p["target_loss_pct"])]})).mark_text(
+        align="left", baseline="bottom", dx=4, dy=-4, color=INK, fontSize=12).encode(
+        x="Date:T", y="t:Q", text="label:N")
     # chart full width, then the weigh-in table full width (it has 10 columns)
-    st.altair_chart(alt.layer(line, target).properties(height=280), width="stretch")
+    st.altair_chart(alt.layer(line, target, tlabel).properties(height=280), width="stretch")
     match = weigh_in_climate()
     per = weigh_in_periods()
+    # weigh-in notes as numbered footnotes below the table (owner, 28 Oct): a note column cuts them off
+    noted = [r for r in rows if (r["note"] or "").strip()]
+    notes_no = {r["day"]: str(i) for i, r in enumerate(noted, 1)}
     tdf = pd.DataFrame([{
         "Date": d(r["day"]).strftime("%d %b"), "Day": (d(r["day"]) - d(p["dry_start"])).days,
         "Weight [g]": int(r["gross_g"]),
@@ -1387,7 +1396,7 @@ def step_dry():
         "Since last °C": period_cell(per.get(d(r["day"])), 0),
         "Since last RH [%]": period_cell(per.get(d(r["day"])), 1),
         "Data [%]": f"{per[d(r['day'])][4] * 100:.0f}" if per.get(d(r["day"])) else "–",
-        "Note": r["note"] or ""} for r in rows])
+        "Footnote": notes_no.get(r["day"], "")} for r in rows])
     left = "left"            # owner 27 Oct: every value aligned left, like the headings
     st.dataframe(tdf, hide_index=True, width="stretch", height=min(38 + 35 * len(tdf), 420), column_config={
         "Date": st.column_config.TextColumn(alignment=left),
@@ -1402,7 +1411,10 @@ def step_dry():
         "Since last RH [%]": st.column_config.TextColumn(alignment=left, help="Average since the previous weigh-in."),
         "Data [%]": st.column_config.TextColumn(alignment=left, help="Share of hours since the previous weigh-in with "
                                                 "sensor readings. Under 50 % the averages get a *."),
-        "Note": st.column_config.TextColumn(alignment=left)})
+        "Footnote": st.column_config.TextColumn(alignment=left, help="Number of the weigh-in note below the table")})
+    if noted:
+        st.markdown("  \n".join(f"**{i}** · {fmt_date(r['day'])}: {md(' '.join(r['note'].split()))}"
+                                 for i, r in enumerate(noted, 1)))
     st.caption("Day: average on the weigh-in day. Since last: average since the previous weigh-in, the "
                "conditions behind that weight loss. * less than half the time covered by sensor data; – none; "
                f"⚠ outside the safe range for a {safety.KINDS[KIND or 'fridge'].lower()} (above "
