@@ -963,17 +963,14 @@ def step_cure():
 # --------------------------------------------------------------------------- #
 
 def save_weigh_in(r: dict, confirmed: bool = False) -> None:
-    """Weigh-in + optional chamber reading + optional photo, in one transaction."""
+    """Weigh-in + optional chamber reading, in one transaction. Photos go through the journal
+    ("Add photos") since v0.4.16: one place for photos (owner, 28 Oct 2026)."""
     try:
         with con:
-            rid = db.add_reading(con, pid, r["day"], r["weight"], r["note"], confirmed=confirmed)
+            db.add_reading(con, pid, r["day"], r["weight"], r["note"], confirmed=confirmed)
             if (r["temp"] is not None or r["rh"] is not None) and p["chamber_id"]:
                 db.add_chamber_reading(con, p["chamber_id"], sensors.weigh_in_time(r["day"]).isoformat(),
                                        r["temp"], r["rh"])          # weigh-ins count as 12:00
-            if r["photo"]:
-                rel = storage.save_photo(pid, *r["photo"])   # raises ValueError if unreadable
-                db.add_photo(con, pid, rel, r["day"], r["note"] or f"Weigh-in {r['weight']:.0f} g",
-                             rid, stage="dry")
     except (db.Locked, ValueError) as e:
         st.error(md(e))
         return
@@ -1299,21 +1296,19 @@ def step_dry():
             rw = c2.number_input("Weight incl. wrap + net [g]", min_value=1.0, value=None, step=1.0,
                                  format="%.0f", placeholder=f"last: {s['latest_gross_g']:.0f}")
             submit = c3.form_submit_button("Save weigh-in", type="primary", width="stretch")
-            with st.expander("More: temperature, humidity, note, photo"):
+            with st.expander("More: temperature, humidity, note"):
                 e1, e2 = st.columns(2)
                 rt = e1.number_input("Chamber temperature [°C]", value=None, step=0.1, placeholder="optional",
                                      min_value=db.TEMP_RANGE[0], max_value=db.TEMP_RANGE[1])
                 rh = e2.number_input("Chamber humidity [%]", value=None, step=1.0, placeholder="optional",
                                      min_value=db.RH_RANGE[0], max_value=db.RH_RANGE[1])
                 rn = st.text_input("Note", placeholder="smell, firmness, mould")
-                ph = st.file_uploader("Photo", type=storage.UPLOAD_TYPES)
             if submit:
                 if rw is None:
                     st.error("Enter the weight.")
                 else:
                     errors, warns = db.reading_problems(con, pid, rd, rw)
-                    pending = dict(day=rd, weight=rw, temp=rt, rh=rh, note=rn or None,
-                                   photo=(ph.name, ph.getvalue()) if ph is not None else None)
+                    pending = dict(day=rd, weight=rw, temp=rt, rh=rh, note=rn or None)
                     if errors:
                         st.error(" ".join(errors))
                     elif warns:
