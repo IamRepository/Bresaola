@@ -332,13 +332,14 @@ def build_pdf(con, pid: int) -> bytes:
     if p["dry_start"] and rs:
         s = db.drying_status(con, pid)
         head = [Paragraph("Drying", S["h2"])]
-        ch = con.execute("SELECT name FROM chamber WHERE id=?", (p["chamber_id"],)).fetchone() \
+        ch = con.execute("SELECT name, tapo_name FROM chamber WHERE id=?", (p["chamber_id"],)).fetchone() \
             if p["chamber_id"] else None
         head.append(Paragraph(_text(
             f"Target {p['target_loss_pct']:g} % weight loss on the meat at the start of drying (start weight "
             f"minus packaging) = {s['target_gross_g']:.0f} g incl. wrap + net. "
             f"Packaging (wrap + net) {tare:.0f} g{' (estimate)' if p['tare_estimated'] else ''}."
-            + (f" Dried in: {ch['name']} ({safety.KINDS[kind or 'fridge'].lower()})." if ch else "")), S["body"]))
+            + (f" Dried in a {safety.KINDS[kind or 'fridge'].lower()}"
+               + (f", sensor {ch['tapo_name']}" if ch["tapo_name"] else "") + "." if ch else "")), S["body"]))
         head += [Spacer(1, 4), _chart(rs, _d(p["dry_start"]), s["target_gross_g"])]
         story.append(KeepTogether(head))
         crs = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"]) if p["chamber_id"] else []

@@ -325,7 +325,7 @@ with st.sidebar:
                     st.session_state["flash_error"] = f"Restore failed, your data is unchanged: {md(e)}"
                 st.rerun()
         # left over from deleted projects (audit #19); a chamber the hub sync feeds is never "unused" (#5)
-        if unused := [c for c in db.unused_chambers(con) if not tapo_sync.hub_fed(c["name"])]:
+        if unused := [c for c in db.unused_chambers(con) if not tapo_sync.hub_fed(c)]:
             with st.popover(f"Unused chambers ({len(unused)})", width="stretch"):
                 st.caption("Drying chambers no project uses. Deleting one removes its readings too.")
                 for c in unused:
@@ -982,19 +982,15 @@ def step_dry_start():
     if not p["cure_locked_at"] and not closed:
         st.info("Lock the cure first. Drying then starts on the day the meat came out of the bag.")
     blk("Wrap, net and weigh")
-    # chamber choice sits outside the form: widgets inside a form only react on submit, so the
-    # "new chamber" fields would never appear before "Start drying" (audit 26 Oct, #1)
-    names = [c["name"] for c in db.chambers(con)]
-    c4, c5 = st.columns(2)
-    ch_name = (c4.selectbox("Drying chamber", names + ["+ New chamber"], key=f"drych{pid}")
-               if names else "+ New chamber")
-    new_ch = new_kind = None
-    if ch_name == "+ New chamber":
-        new_ch = c5.text_input("New chamber name", value="Fridge drawer", key=f"drynewch{pid}")
-        new_kind = st.radio("New chamber type", list(safety.KINDS), format_func=safety.KINDS.get,
-                            horizontal=True, index=None, key=f"drynewkind{pid}",
-                            help="Fridge: about 0-4 °C. Curing chamber: about 10-15 °C. Sets the temperature "
-                                 "rules.")
+    # type outside the form: it is a required choice and must react before "Start drying" (audit 26 Oct, #1).
+    # Each batch has its own sensor and readings (v0.4.17), so there is no chamber to pick.
+    c4, c5 = st.columns([1.4, 1])
+    new_kind = c4.radio("Drying in", list(safety.KINDS), format_func=safety.KINDS.get,
+                        horizontal=True, index=None, key=f"drynewkind{pid}",
+                        help="Fridge: about 0-4 °C. Curing chamber: about 10-15 °C. Sets the temperature rules.")
+    tapo = c5.text_input("Tapo sensor name (optional)", key=f"drytapo{pid}", placeholder="as in the Tapo app",
+                         help="The name of this batch's sensor in the Tapo app. Only needed for the hub sync; "
+                              "imports from the Tapo app work without it.")
     with st.form(f"drystart{pid}"):
         c1, c2, c3 = st.columns(3)
         ds = c1.date_input("Drying start", value=d(p["cure_end_actual"]) or db.today(), format="DD/MM/YYYY",
@@ -1013,20 +1009,12 @@ def step_dry_start():
             if sg is None:
                 st.error("Enter the start weight: weigh the piece with wrap and net.")
                 return
-            ch_label = (new_ch or "").strip() if ch_name == "+ New chamber" else ch_name
-            if not ch_label:
-                st.error("Give the new drying chamber a name, e.g. Fridge drawer.")
-                return
-            if ch_name == "+ New chamber" and not new_kind:
-                st.error("Choose the new chamber's type: fridge or curing chamber. It sets the temperature rules.")
-                return
-            if ch_name == "+ New chamber" and " ".join(ch_label.split()).casefold() in {
-                    " ".join(n_.split()).casefold() for n_ in names}:        # same rule as the hub sync
-                st.error(f"A chamber called {md(ch_label)} already exists: pick it in the list, or use another name.")
+            if not new_kind:
+                st.error("Choose where it dries: fridge or curing chamber. It sets the temperature rules.")
                 return
 
-            def start_drying(con_, pid_):          # one transaction: no stray chamber if drying fails
-                ch = db.get_or_create_chamber(con_, ch_label, kind=new_kind or "fridge")
+            def start_drying(con_, pid_):          # one transaction: no stray sensor table if drying fails
+                ch = db.project_chamber(con_, pid_, kind=new_kind, tapo_name=tapo)
                 db.set_drying(con_, pid_, start=ds, start_gross_g=sg, chamber_id=ch, tare_g=tare,
                               tare_estimated=tare_est, target_loss_pct=tp)
             act(start_drying, pid, success="Drying started")
@@ -1079,7 +1067,7 @@ def time_axis(first, last) -> alt.Axis:
     return alt.Axis(format="%d %b", values=ticks, labelOverlap=True, title=None)
 
 
-def left_out_periods(ch):
+def left_out_periods(ch, no_data=()):
     """Periods the sensor was out of the chamber, kept per chamber: applied to every import and hub sync
     (full audit 27 Oct, #3), and can be added without uploading a file (#4)."""
     ex = db.exclusions(con, ch["id"])
@@ -1090,10 +1078,21 @@ def left_out_periods(ch):
         for e in ex:
             c1, c2 = st.columns([4, 1], vertical_alignment="center")
             a_, b_ = datetime.fromisoformat(e["start_ts"]), datetime.fromisoformat(e["end_ts"])
-            c1.markdown(f"{a_:%d %b %Y %H:%M} to {b_:%d %b %Y %H:%M}")
+            c1.markdown(f"**Left out:** {a_:%d %b %Y %H:%M} to {b_:%d %b %Y %H:%M} ({sensors.span_text(a_, b_)})")
             if c2.button("Remove", key=f"exdel{e['id']}", width="stretch",
                          help="Readings removed earlier don't come back: import the file again"):
                 act(db.delete_exclusion, e["id"], success="Left-out period removed")
+        # stretches without readings: one click turns one into a left-out period (owner, 28 Oct)
+        for i, (a_, b_) in enumerate(no_data):
+            c1, c2 = st.columns([4, 1], vertical_alignment="center")
+            c1.markdown(f"No readings: {a_:%d %b %Y %H:%M} to {b_:%d %b %Y %H:%M} ({sensors.span_text(a_, b_)})")
+            if c2.button("Save as left-out", key=f"exgap{pid}_{i}", width="stretch",
+                         help="If the sensor was out of the fridge then: readings for this time are never imported"):
+                # just inside the readings around the gap: those two readings are real and stay
+                act(db.add_exclusion, ch["id"], a_ + timedelta(minutes=1), b_ - timedelta(minutes=1),
+                    success="Period left out")
+        if ex or no_data:
+            st.divider()
         c1, c2, c3, c4 = st.columns(4)
         # quarter-hour list, not st.time_input: that widget crashed on some browser locales
         lo_d = c1.date_input("From", value=None, format="DD/MM/YYYY", key=f"lo_d{pid}")
@@ -1112,10 +1111,19 @@ def left_out_periods(ch):
 
 
 def chamber_section():
-    """Temperature/humidity of the drying chamber: chart, import from the Tapo app, hub sync."""
+    """This batch's own temperature/humidity readings (v0.4.17: one sensor per piece of meat): chart,
+    left-out overview, import from the Tapo app, hub sync."""
     ch = con.execute("SELECT * FROM chamber WHERE id=?", (p["chamber_id"],)).fetchone()
     cr = db.chamber_readings(con, ch["id"], p["dry_start"], p["dry_end"])
-    blk(f"Chamber: {ch['name']}")
+    blk("Sensor readings" + (f" · Tapo sensor {ch['tapo_name']}" if ch["tapo_name"] else ""))
+    # left-out periods (saved) and stretches without readings, within the drying period
+    d_start = datetime.combine(d(p["dry_start"]), time.min)
+    d_end = min(datetime.combine(d(p["dry_end"]) or db.today(), time(23, 59, 59)), datetime.now(db.TZ).replace(tzinfo=None))
+    ex_all = [(datetime.fromisoformat(e["start_ts"]), datetime.fromisoformat(e["end_ts"]))
+              for e in db.exclusions(con, ch["id"])]
+    ex_in = [(max(a, d_start), min(b, d_end)) for a, b in ex_all if b >= d_start and a <= d_end]
+    no_data = [(a, b) for a, b in sensors.gaps(cr, d_start, d_end)
+               if not any(ea <= a + timedelta(hours=1) and b - timedelta(hours=1) <= eb for ea, eb in ex_in)]
     # charts stay on screen when there is data; settings, import and remove are folded away below
     if not cr:
         st.caption("No readings yet for the drying period.")
@@ -1155,6 +1163,11 @@ def chamber_section():
                         alt.Tooltip(f"{field}_max:Q", title="highest", format=fmt),
                         alt.Tooltip("n:Q", title="readings")]
             layers = []
+            if ex_in:                    # left-out periods as grey bands (owner, 28 Oct)
+                layers.append(alt.Chart(pd.DataFrame([{"a": a, "b": b, "Left out": f"{a:%d %b %H:%M} to {b:%d %b %H:%M}"}
+                                                      for a, b in ex_in])).mark_rect(color=MUTED, opacity=0.18).encode(
+                    x=alt.X("a:T", title=None, axis=time_axis(cdf["Time"].min(), cdf["Time"].max())),
+                    x2="b:T", tooltip=["Left out:N"]))
             if hrs:                      # lowest–highest band behind the average
                 layers.append(alt.Chart(sub).mark_area(color=colour, opacity=0.15).encode(
                     x="Time:T", y=f"{field}_min:Q", y2=f"{field}_max:Q", detail="seg:N"))
@@ -1185,26 +1198,40 @@ def chamber_section():
             st.info(n_, icon=":material/ac_unit:")
         st.caption(f"{len(cr)} readings since drying started: {'; '.join(bits)}. Last reading {fmt_date(cr[-1]['ts'][:10])} "
                    f"{cr[-1]['ts'][11:16]}.")
+    # overview, always visible: what is left out and where readings are missing
+    if ex_in or no_data:
+        st.caption("  \n".join(
+            [f"**Left out** (grey on the charts): {a:%d %b %H:%M} to {b:%d %b %H:%M}, {sensors.span_text(a, b)}"
+             for a, b in ex_in]
+            + [f"**No readings**: {a:%d %b %H:%M} to {b:%d %b %H:%M}, {sensors.span_text(a, b)}"
+               + ("" if closed else " (save it as left-out under Sensor settings if the sensor was out)")
+               for a, b in no_data]))
     if closed:
         return
     # fixed title + key: a changing title would make the section close on every rerun
-    with st.expander("Chamber settings, import and remove", key=f"chamber_exp{pid}"):
+    with st.expander("Sensor settings, import and remove", key=f"chamber_exp{pid}"):
         kinds = list(safety.KINDS)
         dry_done = bool(p["dry_locked_at"])
         new_kind = st.segmented_control(
             "Type", kinds, default=KIND or ch["kind"] or "fridge", key=fresh(f"chkind{pid}", ch["kind"] or "fridge"), disabled=closed or dry_done,
             format_func=lambda k_: f"{safety.KINDS[k_]} (warn above {safety.TEMP_MAX[k_]:g} °C)",
-            help="Sets which temperature rules apply to batches still drying in this chamber. "
-                 "Batches whose drying is locked keep the type they had.")
+            help="Where this batch dries: sets which temperature rules apply.")
         if dry_done:
-            st.caption("Drying is locked, so this batch keeps its chamber type. Unlock drying to change it.")
+            st.caption("Drying is locked, so this batch keeps its type. Unlock drying to change it.")
         elif new_kind and new_kind != (ch["kind"] or "fridge"):
-            act(db.set_chamber_kind, ch["id"], new_kind, success=f"{md(ch['name'])} is now a {safety.KINDS[new_kind].lower()}")
+            act(db.set_chamber_kind, ch["id"], new_kind, success=f"Drying in a {safety.KINDS[new_kind].lower()}")
+        c1_, c2_ = st.columns([3, 1], vertical_alignment="bottom")
+        tn = c1_.text_input("Tapo sensor name", value=ch["tapo_name"] or "", key=fresh(f"tapon{pid}", ch["tapo_name"] or ""),
+                            placeholder="as in the Tapo app", help="Only for the hub sync: the sync fills this batch's "
+                            "readings from the sensor with this name.")
+        if c2_.button("Save name", key=f"taposave{pid}", width="stretch",
+                      disabled=(tn.strip() or None) == (ch["tapo_name"] or None)):
+            act(db.set_tapo_name, ch["id"], tn, success="Tapo sensor name saved")
         st.markdown("**Import from the Tapo app**")
         st.caption("In the Tapo app: sensor → History → View All → download icon → pick interval and range. "
-                   "Attach the file from the e-mail here. Importing the same period again replaces, never doubles. "
-                   "If the sensor was out of the chamber, add that time under Left-out periods (below): "
-                   "it is skipped in this and every later import.")
+                   "Attach the file from the e-mail here. Readings already here are kept and only new times are "
+                   "added, so the next, longer export simply fills in the rest. If the sensor was out of the "
+                   "fridge, add that time under Left-out periods (below): it is skipped in every later import.")
         up = st.file_uploader("Tapo export", type=["csv", "xlsx", "xlsm"], key=f"tapo{pid}{st.session_state.get('tapo_n', 0)}",
                               label_visibility="collapsed")
         if up is not None:
@@ -1217,26 +1244,35 @@ def chamber_section():
                 rows_, n_ex, n_lk = sensors.protected(con, ch["id"], parsed.rows)
                 skip = "; ".join(x for x in (f"{n_ex} in left-out periods" if n_ex else "",
                                              f"{n_lk} in finished drying periods" if n_lk else "") if x)
-                if not rows_:
-                    st.warning("Nothing new to import" + (f" ({skip} are skipped)." if skip else "."))
+                have = sensors.existing_times(con, ch["id"], "tapo_export", rows_)
+                n_have = sum(1 for r_ in rows_ if r_[0].isoformat(timespec="seconds") in have)
+                replace = st.checkbox("Replace readings that are already there", key=f"taporep{pid}",
+                                      help="Normally kept. Tick only if the stored values are wrong.") if n_have else False
+                if not rows_ or (n_have == len(rows_) and not replace):
+                    st.warning("Nothing new to import" + (f": all {n_have} readings are already there" if n_have else "")
+                               + (f" ({skip} are skipped)." if skip else "."))
                 else:
                     temps = [t for _, t, _ in rows_ if t is not None]
                     rhs = [h for _, _, h in rows_ if h is not None]
-                    st.info(f"**{len(rows_)} readings** to import, from {rows_[0][0]:%d %b %Y %H:%M} to "
+                    st.info(f"**{len(rows_) - n_have} new readings**"
+                            + (f", {n_have} already there ({'replaced' if replace else 'kept'})" if n_have else "")
+                            + f". File from {rows_[0][0]:%d %b %Y %H:%M} to "
                             f"{rows_[-1][0]:%d %b %Y %H:%M}"
                             + (f"; temperature {min(temps):.1f} to {max(temps):.1f} °C" if temps else "")
                             + (" (converted from °F)" if parsed.fahrenheit else "")
                             + (f"; humidity {min(rhs):.0f} to {max(rhs):.0f} %" if rhs else "")
                             + (f". Skipped: {skip}" if skip else "")
                             + (f". {parsed.skipped} lines unreadable." if parsed.skipped else "."))
-                    if st.button(f"Import into {md(ch['name'])}", type="primary", key=f"tapoimp{pid}"):
+                    if st.button("Import", type="primary", key=f"tapoimp{pid}"):
                         with con:
-                            res = sensors.import_export(con, ch["id"], parsed.rows)
+                            res = sensors.import_export(con, ch["id"], parsed.rows, replace=replace)
                         st.session_state["tapo_n"] = st.session_state.get("tapo_n", 0) + 1   # empty the uploader
-                        st.session_state["flash"] = (f"{res.stored} readings imported into {md(ch['name'])}"
+                        st.session_state["flash"] = (f"{res.stored} new readings imported"
+                                                     + (f", {res.existing} already there "
+                                                        f"{'replaced' if replace else 'kept'}" if res.existing else "")
                                                      + (f", {res.rejected} out of range skipped" if res.rejected else ""))
                         st.rerun()
-        left_out_periods(ch)
+        left_out_periods(ch, no_data)
         counts = db.chamber_reading_counts(con, ch["id"])
         if counts:
             with st.expander("Remove readings (e.g. imported the wrong file)"):
@@ -1251,20 +1287,21 @@ def chamber_section():
                 if locked:
                     st.caption("Kept in any case, because their drying is locked: " + "; ".join(
                         f"{md(r['name'])} ({fmt_date(r['dry_start'])} to {fmt_date(r['dry_end'])})" for r in locked) + ".")
-                sure = st.checkbox("Remove them. This applies to the whole chamber, so every project still drying in "
-                                   f"{md(ch['name'])} loses these readings.", key=f"rm_ok{pid}")
+                sure = st.checkbox("Remove them from this batch", key=f"rm_ok{pid}")
                 if st.button("Remove readings", disabled=not sure, key=f"rm_b_{pid}"):
                     with con:
                         n, kept = db.delete_chamber_readings(con, ch["id"], src,
                                                              datetime.combine(rm_a, time.min) if rm_a else None,
                                                              datetime.combine(rm_b, time(23, 59, 59)) if rm_b else None)
-                    st.session_state["flash"] = (f"Removed {n} readings from {md(ch['name'])}"
+                    st.session_state["flash"] = (f"Removed {n} readings"
                                                  + (f"; kept {kept} from locked drying periods" if kept else "")
                                                  + ". Import the right file now.")
                     st.rerun()
         if tapo_sync.is_configured():
             st.markdown("**Straight from the hub**")
-            st.caption("The hub keeps the last 24 hours. A daily scheduled sync (see README) keeps the history complete.")
+            st.caption("The hub keeps the last 24 hours. A daily scheduled sync (see docs/NAS.md) keeps the history "
+                       "complete. It fills every drying batch that has a Tapo sensor name (above)"
+                       + ("." if ch["tapo_name"] else "; this batch has none yet."))
             if st.button("Sync last 24 h from hub", key=f"tapohub{pid}"):
                 with st.spinner("Reading the hub..."):
                     res = tapo_sync.sync(con)
@@ -1407,9 +1444,9 @@ def step_dry():
         "Data [%]": st.column_config.TextColumn(alignment=left, help="Share of hours since the previous weigh-in with "
                                                 "sensor readings. Under 50 % the averages get a *."),
         "Footnote": st.column_config.TextColumn(alignment=left, help="Number of the weigh-in note below the table")})
-    if noted:
-        st.markdown("  \n".join(f"**{i}** · {fmt_date(r['day'])}: {md(' '.join(r['note'].split()))}"
-                                 for i, r in enumerate(noted, 1)))
+    if noted:                # same small size as the legend below (owner, 28 Oct)
+        st.caption("  \n".join(f"**{i}** · {fmt_date(r['day'])}: {md(' '.join(r['note'].split()))}"
+                                for i, r in enumerate(noted, 1)))
     st.caption("Day: average on the weigh-in day. Since last: average since the previous weigh-in, the "
                "conditions behind that weight loss. * less than half the time covered by sensor data; – none; "
                f"⚠ outside the safe range for a {safety.KINDS[KIND or 'fridge'].lower()} (above "

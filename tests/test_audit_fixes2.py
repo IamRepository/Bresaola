@@ -124,31 +124,6 @@ def test_half_percent_target_not_rounded(env):
     assert "of 35.5 % lost" in h
 
 
-# 15c: a blank chamber name is refused and no stray chamber is created
-def test_blank_chamber_name_refused(env):
-    pid = db.create_project(env, "Second", "Classic Italian", False, 1000, start_date=date(2026, 9, 1))
-    with env:
-        db.lock_spice(env, pid)
-        db.set_cure(env, pid, shape="flat", thickness_cm=4, start=date(2026, 9, 1), end_actual=date(2026, 9, 5))
-        db.lock_cure(env, pid)
-    sql(env, "UPDATE project SET chamber_id=NULL")
-    sql(env, "DELETE FROM chamber_reading")
-    sql(env, "DELETE FROM chamber")
-    at = AppTest.from_file(APP, default_timeout=30)
-    at.run()
-    next(s for s in at.sidebar.selectbox if s.label == "Project").set_value(pid)
-    at.run()
-    next(b for b in at.button if b.key == "rail_dry").click()
-    at.run()
-    next(t for t in at.text_input if t.label == "New chamber name").input("  ")
-    next(n for n in at.number_input if n.label == "Start weight incl. wrap + net [g]").set_value(950)
-    next(b for b in at.button if b.label == "Start drying").click()
-    at.run()
-    assert not at.exception, at.exception
-    assert any("chamber" in e.value.lower() for e in at.error)
-    assert [c["name"] for c in db.chambers(env)] == []
-
-
 # ---- editable start date (v0.3.7) ---------------------------------------------------
 
 def test_start_date_change_moves_unlocked_bag_date(tmp_path, monkeypatch):

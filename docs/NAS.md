@@ -52,7 +52,11 @@ The H100 keeps only the last 24 hours, so this needs a daily task.
         TAPO_USERNAME=you@example.com
         TAPO_PASSWORD=your-tapo-password
         TAPO_HUB_IP=192.168.1.50
-        TAPO_SENSORS=Fridge drawer=<the sensor's name in the Tapo app>
+
+    Which sensor belongs to which batch is set in the app, not here (v0.4.17: one sensor per piece of
+    meat): Dry step → **Sensor settings, import and remove** → **Tapo sensor name** (the name in the Tapo
+    app) → **Save name**. The sync fills every batch that is drying and has a name. (Older setups with
+    `TAPO_SENSORS=Fridge drawer=<name>` keep working.)
 
     Don't edit `compose.yaml`: updates replace it. `.env` is never replaced, never in git and not copied
     into the image. The password sits in that file on the NAS: keep the folder private.

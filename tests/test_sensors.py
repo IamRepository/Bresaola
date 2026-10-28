@@ -162,8 +162,8 @@ def test_dry_step_shows_chamber_section(con, monkeypatch):
     at = AppTest.from_file(APP, default_timeout=30)
     at.run()
     assert not at.exception, at.exception
-    assert 'class="blk">Chamber: Fridge drawer' in " ".join(m.value for m in at.markdown)
-    assert any(e.label == "Chamber settings, import and remove" for e in at.expander)
+    assert 'class="blk">Sensor readings' in " ".join(m.value for m in at.markdown)      # v0.4.17: per batch
+    assert any(e.label == "Sensor settings, import and remove" for e in at.expander)
     assert any("Import from the Tapo app" in m.value for m in at.markdown)
     assert not any(b.label == "Sync last 24 h from hub" for b in at.button)       # not configured here
 
@@ -301,7 +301,7 @@ def test_chamber_charts_visible_without_opening_anything(con, monkeypatch):
     at = AppTest.from_file(APP, default_timeout=30)
     at.run()
     assert not at.exception, at.exception
-    settings = next(e for e in at.expander if e.label == "Chamber settings, import and remove")
+    settings = next(e for e in at.expander if e.label == "Sensor settings, import and remove")
     assert not any(b.key == "chview1" for b in settings.button_group)           # chart controls outside
     assert any(b.key == "chview1" for b in at.button_group)
     assert any(b.key == "chkind1" for b in settings.button_group)               # type setting folded away

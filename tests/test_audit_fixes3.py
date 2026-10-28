@@ -45,48 +45,30 @@ def open_dry_start(pid):
     return at
 
 
-# 1: "+ New chamber" shows its name and type fields straight away, not only after submitting
-def test_new_chamber_fields_appear_before_submit(env):
+# 1: drying start asks for the type straight away (v0.4.17: each batch gets its own sensor table)
+def test_drying_start_creates_the_batch_own_sensor_table(env):
     pid = second_batch_ready_to_dry(env)
     at = open_dry_start(pid)
-    assert not [t for t in at.text_input if t.label == "New chamber name"]      # existing chamber picked
-    next(s for s in at.selectbox if s.label == "Drying chamber").set_value("+ New chamber")
-    at.run()
-    assert not at.exception, at.exception
-    next(t for t in at.text_input if t.label == "New chamber name").input("Curing cabinet")
-    next(r for r in at.radio if r.label == "New chamber type").set_value("chamber")
+    assert not [s for s in at.selectbox if s.label == "Drying chamber"]           # nothing to pick any more
+    next(r for r in at.radio if r.label == "Drying in").set_value("chamber")
+    next(t for t in at.text_input if t.label == "Tapo sensor name (optional)").input("Rome T315")
     next(n for n in at.number_input if n.label == "Start weight incl. wrap + net [g]").set_value(950)
     next(b for b in at.button if b.label == "Start drying").click()
     at.run()
     assert not at.exception, at.exception
     p = db.project(env, pid)
     ch = env.execute("SELECT * FROM chamber WHERE id=?", (p["chamber_id"],)).fetchone()
-    assert (ch["name"], ch["kind"]) == ("Curing cabinet", "chamber")
+    assert (ch["project_id"], ch["kind"], ch["tapo_name"]) == (pid, "chamber", "Rome T315")
+    assert p["chamber_id"] != db.project(env, 1)["chamber_id"]                    # not Palermo's
 
 
-def test_new_chamber_needs_a_type(env):
+def test_drying_start_needs_a_type(env):
     pid = second_batch_ready_to_dry(env)
     at = open_dry_start(pid)
-    next(s for s in at.selectbox if s.label == "Drying chamber").set_value("+ New chamber")
-    at.run()
-    next(t for t in at.text_input if t.label == "New chamber name").input("Cabinet")
     next(n for n in at.number_input if n.label == "Start weight incl. wrap + net [g]").set_value(950)
     next(b for b in at.button if b.label == "Start drying").click()
     at.run()
-    assert any("type" in e.value for e in at.error)
-    assert db.project(env, pid)["dry_start"] is None
-
-
-def test_new_chamber_name_must_be_new(env):
-    pid = second_batch_ready_to_dry(env)
-    at = open_dry_start(pid)
-    next(s for s in at.selectbox if s.label == "Drying chamber").set_value("+ New chamber")
-    at.run()
-    next(r for r in at.radio if r.label == "New chamber type").set_value("chamber")
-    next(n for n in at.number_input if n.label == "Start weight incl. wrap + net [g]").set_value(950)
-    next(b for b in at.button if b.label == "Start drying").click()       # default name "Fridge drawer" exists
-    at.run()
-    assert any("already exists" in e.value for e in at.error)
+    assert any("fridge or curing chamber" in e.value for e in at.error)
     assert db.project(env, pid)["dry_start"] is None
 
 

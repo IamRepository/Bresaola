@@ -31,7 +31,7 @@ def test_notes_are_numbered_footnotes_below_the_table(at):
     df = next(d for d in at.dataframe if "Weight [g]" in d.value.columns).value
     assert "Note" not in df.columns
     assert list(df["Footnote"]) == ["1", "", "2", "", ""]
-    text = " ".join(m.value for m in at.markdown)
+    text = " ".join(c.value for c in at.caption)                     # v0.4.17: caption size, like the legend
     assert "**1** · 20 Sep 2026: Start of drying" in text
     assert r"**2** · 30 Sep 2026: Firm outside, soft \*centre\*" in text      # as typed, one line
 

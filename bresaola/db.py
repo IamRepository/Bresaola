@@ -164,7 +164,9 @@ MIGRATIONS = {"project": [("start_date", "TEXT"), ("spice_note", "TEXT"),
                           ("equalise_locked_at", "TEXT"), ("cure_fridge_c", "REAL"),
                           ("dry_kind", "TEXT")],
               "photo": [("stage", "TEXT")],
-              "chamber": [("kind", "TEXT")]}
+              "chamber": [("kind", "TEXT"),
+                          ("project_id", "INTEGER"),     # v0.4.17: each batch has its own readings
+                          ("tapo_name", "TEXT")]}        # the batch's Tapo sensor (for the hub sync)
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
@@ -190,6 +192,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
     con.execute("UPDATE chamber SET kind = 'fridge' WHERE kind IS NULL")   # all chambers so far were fridges
     con.execute("""INSERT OR IGNORE INTO meta (key, value)
                    SELECT 'last_project_id', CAST(COALESCE(MAX(id), 0) AS TEXT) FROM project""")
+    _split_shared_chambers(con, path)
     # finished drying keeps the chamber type it had (v0.4.3): later changes to the chamber don't rewrite it
     con.execute("""UPDATE project SET dry_kind = (SELECT kind FROM chamber WHERE chamber.id = project.chamber_id)
                    WHERE dry_locked_at IS NOT NULL AND dry_kind IS NULL AND chamber_id IS NOT NULL""")
@@ -200,6 +203,66 @@ def connect(path: str | Path) -> sqlite3.Connection:
                    WHERE cure_method IS NOT NULL AND cure_method != ''""")
     con.commit()
     return con
+
+
+def _split_shared_chambers(con, path) -> None:
+    """v0.4.17: one sensor per piece of meat, so each batch owns its readings. A chamber used by one
+    batch becomes that batch's; a chamber shared by several is copied (readings and left-out periods)
+    so each batch has its own. A copy of the database file is made once before anything changes."""
+    todo = con.execute("""SELECT p.id pid, p.chamber_id ch, c.project_id owner FROM project p
+                          JOIN chamber c ON c.id = p.chamber_id
+                          WHERE c.project_id IS NULL OR c.project_id != p.id ORDER BY p.id""").fetchall()
+    if not todo:
+        return
+    con.commit()
+    if str(path) != ":memory:" and Path(str(path)).exists():
+        keep = Path(str(path)).with_name(Path(str(path)).stem + "-before-v0.4.17.sqlite")
+        if not keep.exists():
+            dst = sqlite3.connect(str(keep))
+            con.backup(dst)
+            dst.close()
+    with con:
+        for r in todo:
+            owner = con.execute("SELECT project_id FROM chamber WHERE id=?", (r["ch"],)).fetchone()[0]
+            if owner is None:                        # first batch on this chamber: it becomes its own
+                con.execute("UPDATE chamber SET project_id=? WHERE id=?", (r["pid"], r["ch"]))
+                continue
+            src = con.execute("SELECT * FROM chamber WHERE id=?", (r["ch"],)).fetchone()
+            name = _free_chamber_name(con, project(con, r["pid"])["name"] + " sensor")
+            new = con.execute("INSERT INTO chamber (name, sensor, notes, kind, project_id, tapo_name) "
+                              "VALUES (?,?,?,?,?,?)", (name, src["sensor"], src["notes"], src["kind"],
+                                                       r["pid"], src["tapo_name"])).lastrowid
+            con.execute("""INSERT INTO chamber_reading (chamber_id, ts, temp_c, rh_pct, source)
+                           SELECT ?, ts, temp_c, rh_pct, source FROM chamber_reading WHERE chamber_id=?""",
+                        (new, r["ch"]))
+            con.execute("""INSERT INTO chamber_exclusion (chamber_id, start_ts, end_ts, created_at)
+                           SELECT ?, start_ts, end_ts, created_at FROM chamber_exclusion WHERE chamber_id=?""",
+                        (new, r["ch"]))
+            con.execute("UPDATE project SET chamber_id=? WHERE id=?", (new, r["pid"]))
+
+
+def _free_chamber_name(con, base: str) -> str:
+    name, i = base, 2
+    while con.execute("SELECT 1 FROM chamber WHERE name=?", (name,)).fetchone():
+        name, i = f"{base} {i}", i + 1
+    return name
+
+
+def project_chamber(con, pid: int, kind: str = "fridge", tapo_name: str | None = None) -> int:
+    """The batch's own sensor table, created on first use (drying start)."""
+    row = con.execute("SELECT id FROM chamber WHERE project_id=?", (pid,)).fetchone()
+    if row:
+        return row["id"]
+    if kind not in ("fridge", "chamber"):
+        raise ValueError("Kind must be 'fridge' or 'chamber'")
+    name = _free_chamber_name(con, project(con, pid)["name"] + " sensor")
+    return con.execute("INSERT INTO chamber (name, kind, project_id, tapo_name) VALUES (?,?,?,?)",
+                       (name, kind, pid, (tapo_name or "").strip() or None)).lastrowid
+
+
+def set_tapo_name(con, chamber_id: int, tapo_name: str | None) -> None:
+    """The Tapo app's name for this batch's sensor; the hub sync fills the batch's readings from it."""
+    con.execute("UPDATE chamber SET tapo_name=? WHERE id=?", ((tapo_name or "").strip() or None, chamber_id))
 
 
 def log(con, project_id: int, kind: str, detail: str = "") -> None:
@@ -238,13 +301,17 @@ TEMP_RANGE = (-5.0, 30.0)     # °C, a curing fridge or chamber
 RH_RANGE = (0.0, 100.0)       # %
 
 
-def add_chamber_reading(con, chamber_id: int, ts, temp_c=None, rh_pct=None, source="manual"):
+def add_chamber_reading(con, chamber_id: int, ts, temp_c=None, rh_pct=None, source="manual",
+                        replace: bool = True) -> bool:
+    """Store one reading. replace=False keeps a reading already stored for that time and source
+    (imports add, never overwrite unless asked). Returns True if stored."""
     if temp_c is not None and not TEMP_RANGE[0] <= temp_c <= TEMP_RANGE[1]:
         raise ValueError(f"Temperature {temp_c:g} °C is outside {TEMP_RANGE[0]:g} to {TEMP_RANGE[1]:g} °C")
     if rh_pct is not None and not RH_RANGE[0] <= rh_pct <= RH_RANGE[1]:
         raise ValueError(f"Humidity {rh_pct:g} % is outside 0 to 100 %")
-    con.execute("""INSERT OR REPLACE INTO chamber_reading (chamber_id, ts, temp_c, rh_pct, source)
-                   VALUES (?,?,?,?,?)""", (chamber_id, _iso(ts), temp_c, rh_pct, source))
+    verb = "INSERT OR REPLACE" if replace else "INSERT OR IGNORE"
+    return con.execute(f"""{verb} INTO chamber_reading (chamber_id, ts, temp_c, rh_pct, source)
+                           VALUES (?,?,?,?,?)""", (chamber_id, _iso(ts), temp_c, rh_pct, source)).rowcount > 0
 
 
 SOURCE_NAMES = {"tapo_export": "Tapo app import", "tapo_api": "hub sync", "manual": "entered with weigh-ins"}
@@ -925,11 +992,17 @@ def events(con, pid: int) -> list[sqlite3.Row]:
 
 
 def delete_project(con, pid: int) -> list[str]:
-    """Delete a project and all its rows. Returns photo paths so the caller can remove files.
-    Chambers and their readings are shared and stay."""
+    """Delete a project and all its rows, including its own sensor readings (v0.4.17).
+    Returns photo paths so the caller can remove files."""
     paths = [r["path"] for r in photos(con, pid)]
     con.execute("PRAGMA foreign_keys = ON")
+    own = [r["id"] for r in con.execute("SELECT id FROM chamber WHERE project_id=?", (pid,))]
     con.execute("DELETE FROM project WHERE id=?", (pid,))
+    for ch in own:
+        if not con.execute("SELECT 1 FROM project WHERE chamber_id=?", (ch,)).fetchone():
+            con.execute("DELETE FROM chamber_reading WHERE chamber_id=?", (ch,))
+            con.execute("DELETE FROM chamber_exclusion WHERE chamber_id=?", (ch,))
+            con.execute("DELETE FROM chamber WHERE id=?", (ch,))
     return paths
 
 

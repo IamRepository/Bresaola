@@ -219,14 +219,16 @@ def leave_out(rows, start: datetime | None, end: datetime | None):
     return kept, len(rows) - len(kept)
 
 
-def import_readings(con, chamber_id: int, rows, source: str) -> tuple[int, int]:
-    """Store readings; returns (stored, rejected as out of range). Re-importing the same
-    times replaces them, so importing overlapping exports never duplicates."""
+def import_readings(con, chamber_id: int, rows, source: str, replace: bool = True) -> tuple[int, int]:
+    """Store readings; returns (stored, rejected as out of range). Overlapping imports never duplicate.
+    replace=False (Tapo export and hub sync since v0.4.17) keeps readings already stored for a time:
+    a later, longer export only adds what is new. Times already stored are not counted as stored."""
     stored = rejected = 0
     for t, temp, rh in rows:
         try:
-            db.add_chamber_reading(con, chamber_id, t.isoformat(timespec="seconds"), temp, rh, source=source)
-            stored += 1
+            if db.add_chamber_reading(con, chamber_id, t.isoformat(timespec="seconds"), temp, rh,
+                                      source=source, replace=replace):
+                stored += 1
         except ValueError:
             rejected += 1
     return stored, rejected
@@ -234,8 +236,9 @@ def import_readings(con, chamber_id: int, rows, source: str) -> tuple[int, int]:
 
 @dataclass
 class ImportResult:
-    stored: int = 0
+    stored: int = 0            # new readings added
     rejected: int = 0          # outside the plausible range
+    existing: int = 0          # already stored for that time: kept (or replaced if asked)
     removed: int = 0           # stored earlier, inside the new left-out period
     left_out: int = 0          # inside a saved left-out period
     locked: int = 0            # inside a finished (locked) drying period
@@ -259,16 +262,50 @@ def protected(con, chamber_id: int, rows):
     return kept, n_ex, n_lk
 
 
-def import_export(con, chamber_id: int, rows, lo: datetime | None = None, hi: datetime | None = None) -> ImportResult:
+def import_export(con, chamber_id: int, rows, lo: datetime | None = None, hi: datetime | None = None,
+                  replace: bool = False) -> ImportResult:
     """Import a Tapo export. A leave-out period (lo..hi, inclusive) is saved for the chamber: readings
     already stored for it are removed (audit 26 Oct, #9), and it applies to every later import and hub
-    sync (full audit 27 Oct, #3). Nothing is stored inside saved left-out or locked drying periods."""
+    sync (full audit 27 Oct, #3). Nothing is stored inside saved left-out or locked drying periods.
+    Readings already stored are kept unless replace=True (owner, 28 Oct 2026)."""
     res = ImportResult()
     if lo and hi:
         res.removed = db.add_exclusion(con, chamber_id, lo, hi)
     rows, res.left_out, res.locked = protected(con, chamber_id, rows)
-    res.stored, res.rejected = import_readings(con, chamber_id, rows, "tapo_export")
+    have = existing_times(con, chamber_id, "tapo_export", rows)
+    res.existing = sum(1 for r in rows if r[0].isoformat(timespec="seconds") in have)
+    res.stored, res.rejected = import_readings(con, chamber_id, rows, "tapo_export", replace=replace)
+    if replace:                       # replaced readings are not new
+        res.stored = max(res.stored - res.existing, 0)
     return res
+
+
+def existing_times(con, chamber_id: int, source: str, rows) -> set[str]:
+    """Times (ISO) of `rows` already stored for this chamber and source."""
+    if not rows:
+        return set()
+    a = min(r[0] for r in rows).isoformat(timespec="seconds")
+    b = max(r[0] for r in rows).isoformat(timespec="seconds")
+    return {r[0] for r in con.execute("SELECT ts FROM chamber_reading WHERE chamber_id=? AND source=? "
+                                      "AND ts >= ? AND ts <= ?", (chamber_id, source, a, b))}
+
+
+def gaps(chamber_rows, start: datetime, end: datetime, min_hours: float = 6) -> list[tuple[datetime, datetime]]:
+    """Stretches of at least `min_hours` between start and the last reading without any reading
+    (sensor offline or readings removed). The time after the last reading is not a gap: it is simply
+    not imported yet. Each gap runs from the reading before it to the reading after it."""
+    ts = sorted(t for t in (datetime.fromisoformat(r["ts"]) for r in chamber_rows) if start <= t <= end)
+    if not ts:
+        return []
+    pts = [start] + ts
+    lim = timedelta(hours=min_hours)
+    return [(a, b) for a, b in zip(pts, pts[1:]) if b - a >= lim]
+
+
+def span_text(a: datetime, b: datetime) -> str:
+    """'5 d 16 h' / '7 h' for a period."""
+    h = round((b - a).total_seconds() / 3600)
+    return f"{h // 24} d {h % 24} h" if h >= 24 else f"{h} h"
 
 
 WEIGH_IN_TIME = time(12, 0)          # weigh-ins have a date only; shown at noon on the charts

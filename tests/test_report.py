@@ -39,7 +39,7 @@ def test_demo_summary_contents(con):
     t = text(report.build_pdf(con, 1))
     for s in ("26/08/15 Palermo Spicy", "summary so far", "1963 g", "137 g", "36 days",
               "Fennel seed, powder", "Used less fennel than planned", "Timeline", "18 Sep 2026",
-              "1365 g", "8 Oct 2026", "Equilibrium dry cure", "Fridge drawer"):
+              "1365 g", "8 Oct 2026", "Equilibrium dry cure", "Dried in a fridge"):
         assert s in t, s
 
 

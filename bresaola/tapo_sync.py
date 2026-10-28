@@ -10,8 +10,11 @@ Settings come from environment variables, never from the database or the repo:
     TAPO_USERNAME   Tapo account e-mail
     TAPO_PASSWORD   Tapo account password
     TAPO_HUB_IP     the H100's IP address on your network, e.g. 192.168.1.50
-    TAPO_SENSORS    which sensor feeds which chamber: "Fridge drawer=Bresaola sensor"
-                    (chamber name = sensor nickname in the Tapo app; separate pairs with ;)
+    TAPO_SENSORS    optional, older setups only: "Fridge drawer=Bresaola sensor" (chamber name =
+                    sensor nickname in the Tapo app; separate pairs with ;)
+
+Since v0.4.17 each batch has its own readings: give the batch its Tapo sensor name in the app
+(Dry step -> Sensor settings). The sync fills every batch that is drying and has one.
 
 Needs `pip install tapo` (Python 3.11+). Not used on Streamlit Cloud, which can't reach the hub.
 """
@@ -41,7 +44,9 @@ def sensor_map(raw: str | None = None) -> dict[str, str]:
 
 
 def is_configured() -> bool:
-    return all(os.environ.get(k) for k in ("TAPO_USERNAME", "TAPO_PASSWORD", "TAPO_HUB_IP")) and bool(sensor_map())
+    """The hub can be reached: account and hub address are set. Which sensors feed which batch is
+    stored per batch in the app (or, for older setups, in TAPO_SENSORS)."""
+    return all(os.environ.get(k) for k in ("TAPO_USERNAME", "TAPO_PASSWORD", "TAPO_HUB_IP"))
 
 
 def to_local(t: datetime) -> datetime:
@@ -71,9 +76,12 @@ async def fetch(nicknames: list[str], client_factory=None) -> dict[str, list]:
     client = client_factory(os.environ["TAPO_USERNAME"], os.environ["TAPO_PASSWORD"])
     hub = await client.h100(os.environ["TAPO_HUB_IP"])
     out = {}
-    for nick in nicknames:
-        sensor = await hub.t31x(nickname=nick)
-        out[nick] = records_to_rows(await sensor.get_temperature_humidity_records())
+    for nick in nicknames:              # one wrong sensor name must not stop the others
+        try:
+            sensor = await hub.t31x(nickname=nick)
+            out[nick] = records_to_rows(await sensor.get_temperature_humidity_records())
+        except Exception as e:
+            out[nick] = e
     return out
 
 
@@ -94,46 +102,67 @@ def norm_name(name: str) -> str:
     return " ".join(name.split()).casefold()
 
 
-def hub_fed(name: str) -> bool:
-    """True if TAPO_SENSORS sends readings to this chamber."""
-    return norm_name(name) in {norm_name(c) for c in sensor_map()}
+def hub_fed(chamber_row) -> bool:
+    """True if the hub sync sends readings to this chamber: it has a Tapo sensor name, or (older
+    setups) TAPO_SENSORS names it."""
+    if chamber_row["tapo_name"]:
+        return True
+    return norm_name(chamber_row["name"]) in {norm_name(c) for c in sensor_map()}
 
 
-def find_chamber(con, name: str, may_create: bool = False) -> tuple[int | None, str | None]:
-    """(chamber id, None) for the chamber called `name`, ignoring capitals and extra spaces.
-    No match: (None, error) - never a silent new chamber (audit 26 Oct, #20), unless may_create
-    (the database had no chambers at all when the sync started: first-time setup)."""
+def find_chamber(con, name: str) -> tuple[int | None, str | None]:
+    """(chamber id, None) for the chamber called `name`, ignoring capitals and extra spaces, or
+    (None, error): never a silent new chamber (audit 26 Oct, #20). Used for TAPO_SENSORS only."""
     rows = db.chambers(con)
     for r in rows:
         if norm_name(r["name"]) == norm_name(name):
             return r["id"], None
-    if may_create:
-        return db.get_or_create_chamber(con, " ".join(name.split()), "Tapo T31x via H100"), None
-    return None, (f"no chamber called '{name}' (TAPO_SENSORS in .env). Existing: "
-                  + ", ".join(r["name"] for r in rows) + ". Fix the name in .env, or start drying a batch "
-                  "in a chamber with this name; nothing stored.")
+    return None, (f"no chamber called '{name}' (TAPO_SENSORS in .env). Since v0.4.17, give the batch its "
+                  "Tapo sensor name in the app instead (Dry step, Sensor settings); nothing stored.")
+
+
+def targets(con) -> list[tuple[str, str, int | None, str | None]]:
+    """(label, sensor nickname, chamber id or None, error) for every batch that is drying (started,
+    not locked, not closed) and has a Tapo sensor name; plus older TAPO_SENSORS pairs."""
+    out, seen = [], set()
+    for r in con.execute("""SELECT c.id, c.tapo_name, p.name FROM chamber c JOIN project p ON p.id = c.project_id
+                            WHERE c.tapo_name IS NOT NULL AND p.dry_start IS NOT NULL
+                              AND p.dry_locked_at IS NULL AND p.status != 'closed' ORDER BY p.name"""):
+        out.append((r["name"], r["tapo_name"], r["id"], None))
+        seen.add(r["id"])
+    for name, nick in sensor_map().items():
+        ch, err = find_chamber(con, name)
+        if ch not in seen:
+            out.append((name, nick, ch, err))
+            seen.add(ch)
+    return out
 
 
 def sync(con, client_factory=None) -> list[Result]:
-    """Fetch every configured sensor and store its readings under its chamber."""
-    pairs = sensor_map()
-    results = [Result(ch, nick) for ch, nick in pairs.items()]
+    """Fetch every batch's sensor and store its readings in that batch's table. Readings already
+    stored are kept (v0.4.17: data is added, never overwritten)."""
+    tg = targets(con)
+    results = [Result(label, nick, error=err) for label, nick, _, err in tg]
+    nicks = sorted({nick for _, nick, ch, err in tg if ch is not None and not err})
+    if not nicks:
+        return results
     try:
-        data = asyncio.run(fetch(list(pairs.values()), client_factory))
+        data = asyncio.run(fetch(nicks, client_factory))
     except Exception as e:                          # hub off, wrong password, sensor renamed ...
         for r in results:
-            r.error = f"{type(e).__name__}: {e}"
+            r.error = r.error or f"{type(e).__name__}: {e}"
         return results
-    first_setup = not db.chambers(con)              # no chambers yet: every configured one may be created
-    for r in results:
-        rows = data.get(r.sensor, [])
+    for r, (_, nick, ch_id, err) in zip(results, tg):
+        if err or ch_id is None:
+            continue
+        rows = data.get(nick, [])
+        if isinstance(rows, Exception):
+            r.error = f"sensor '{nick}': {type(rows).__name__}: {rows}"
+            continue
         with con:
-            ch_id, r.error = find_chamber(con, r.chamber, may_create=first_setup)
-            if ch_id is None:
-                continue
             keep, n_ex, n_lk = sensors.protected(con, ch_id, rows)
             r.skipped = n_ex + n_lk
-            r.stored, r.rejected = sensors.import_readings(con, ch_id, keep, SOURCE)
+            r.stored, r.rejected = sensors.import_readings(con, ch_id, keep, SOURCE, replace=False)
         if rows:
             r.first, r.last = rows[0][0], rows[-1][0]
     return results
@@ -141,11 +170,14 @@ def sync(con, client_factory=None) -> list[Result]:
 
 def main() -> int:
     if not is_configured():
-        print("Set TAPO_USERNAME, TAPO_PASSWORD, TAPO_HUB_IP and TAPO_SENSORS first (see the top of this file).")
+        print("Set TAPO_USERNAME, TAPO_PASSWORD and TAPO_HUB_IP first (see the top of this file).")
         return 2
     con = db.connect(storage.db_path())
     ok = True
-    for r in sync(con):
+    res = sync(con)
+    if not res:
+        print("No batch is drying with a Tapo sensor name: nothing to sync (Dry step, Sensor settings).")
+    for r in res:
         if r.error:
             ok = False
             print(f"{r.chamber} ({r.sensor}): FAILED, {r.error}")

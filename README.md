@@ -2,7 +2,7 @@
 
 Records home-cured bresaola batches from spice mix to slicing: calculated amounts, cure time, weigh-ins, chamber temperature/humidity and photos, then a PDF summary when the batch is closed.
 
-**Status: v0.4.16 — journey layout, PDF summary, Tapo sensor import, food-safety checks.**
+**Status: v0.4.17 — journey layout, PDF summary, Tapo sensor import, food-safety checks.**
 
 ## Steps (journey rail at the top; a next-action card says what to do today)
 1. **Day 0: spice and bag** – meat weight, EcoCure on/off, blend → planned grams, actual amounts; measure the piece and seal the bag (cure time shown live). *Done* locks day 0 and starts the cure.
@@ -76,7 +76,8 @@ The hub keeps only the last 24 hours (15-minute averages), so schedule a sync at
 2. Set these environment variables for the app and for the scheduled task:
    - `TAPO_USERNAME` / `TAPO_PASSWORD`: your Tapo account
    - `TAPO_HUB_IP`: the H100's address (Tapo app → hub → Device info), best fixed in your router
-   - `TAPO_SENSORS`: `Fridge drawer=<sensor nickname in the Tapo app>` (more pairs separated by `;`)
+   - Each batch's sensor: set its **Tapo sensor name** in the Dry step (v0.4.17). `TAPO_SENSORS`
+     (`<chamber>=<sensor nickname>`) is only for older setups.
 3. Test it once: `python -m bresaola.tapo_sync`
 4. Schedule the same command daily (Windows Task Scheduler, or cron on the NAS, e.g. `15 6 * * *`).
 
