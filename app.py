@@ -9,6 +9,7 @@ Run:  streamlit run app.py
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import os
 import re
@@ -72,6 +73,9 @@ section[data-testid="stSidebar"] .st-key-testmode [data-testid="stAlert"] p {{ f
 .st-key-rail button p {{ font-weight: 500; font-size: .98rem; text-align: left; line-height: 1.25; }}
 .st-key-rail button:hover {{ border-color: {RED}; color: {RED}; }}
 .stat {{ margin: .4rem .1rem 0; line-height: 1.35; }}
+/* the result band has 5 metrics: at the default size "Estimated finish" was cut off (full audit #6) */
+[data-testid="stMetricValue"] {{ font-size: 1.6rem; }}
+[data-testid="stMetricValue"] > div {{ overflow: visible; text-overflow: clip; }}
 .stat .tag {{ display:inline-block; font-size:.68rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
   padding:.12rem .45rem; border-radius:4px; margin-right:.35rem; vertical-align:1px; }}
 .stat .main {{ font-size:.86rem; font-weight:600; color:{INK}; }}
@@ -153,16 +157,13 @@ def act(fn, *a, success: str | None = None, goto: str | None = None, **kw):
     st.rerun()
 
 
-def fresh(key: str, db_value):
-    """Call right before drawing a keyed control that shows a database value. If the database changed
-    since this browser tab last drew it (another tab, the phone, a restore), drop the control's old
-    value so it shows the database again, instead of saving its stale value back (full audit 27 Oct, #1).
-    Returns the key, so it can be used inline: key=fresh(f"w{pid}", p["green_weight_g"])."""
-    mark = f"_db_{key}"
-    if mark in st.session_state and st.session_state[mark] != db_value:
-        st.session_state.pop(key, None)
-    st.session_state[mark] = db_value
-    return key
+def fresh(key: str, db_value) -> str:
+    """Widget key for a control that shows a database value: the value is part of the key. When the
+    database changes elsewhere (another tab, the phone, a restore), the control gets a new key, so it is a
+    new widget showing the database value; the browser has no old value for it to send back.
+    (v0.4.9 only reset the server's copy; the browser kept the old value and saved it back two clicks
+    later: full audit 28 Oct 2026, #1.) Use inline: key=fresh(f"w{pid}", p["green_weight_g"])."""
+    return f"{key}@{hashlib.sha1(repr(db_value).encode()).hexdigest()[:10]}"
 
 
 def blk(title: str):
@@ -480,7 +481,9 @@ with st.container(key="rail"):
     css.append(f'div[data-testid="stLayoutWrapper"]:has(> .st-key-rail) {{ position: sticky; top: 3.75rem; '
                f'z-index: 100; background: {SURFACE}; padding: .25rem 0 .6rem; border-bottom: 1px solid {LINE}; }}'
                f'@media (max-width: 700px) {{ div[data-testid="stLayoutWrapper"]:has(> .st-key-rail) '
-               f'{{ position: static; border-bottom: 0; }} }}'
+               f'{{ position: static; border-bottom: 0; }} '
+               # the steps stack there: Streamlit's -16px under each status pulled the next button over it
+               f'.st-key-rail [data-testid="stMarkdownContainer"] {{ margin-bottom: 0 !important; }} }}'   # full audit #4
                f'header[data-testid="stHeader"] {{ background: {SURFACE}; }}')   # no content showing above it
     # compact (owner chose variant B, 28 Oct 2026): smaller title and buttons, one status line per step;
     # the fixed part is 163 px instead of 234 px. The previous design is on branch design/before-sticky-top.
@@ -691,7 +694,8 @@ def step_day0():
                 if c1.button("Yes, without curing salt", type="primary", key=f"nocure_ok{pid}", width="stretch"):
                     act(apply_recipe_change, pid, success="EcoCure #2 switched off; plan recalculated")
                 if c2.button("Keep EcoCure #2", key=f"nocure_no{pid}", width="stretch"):
-                    for k_ in (f"b{pid}", f"w{pid}", f"e{pid}"):
+                    for k_ in (fresh(f"b{pid}", p["blend"]), fresh(f"w{pid}", float(p["green_weight_g"])),
+                               fresh(f"e{pid}", bool(p["ecocure"]))):
                         st.session_state.pop(k_, None)
                     st.rerun()
             elif changed and not edited:
@@ -704,7 +708,8 @@ def step_day0():
                 if c1.button("Recalculate and reset", type="primary", key=f"rc_ok{pid}", width="stretch"):
                     act(apply_recipe_change, pid, success="Plan recalculated; actual amounts reset")
                 if c2.button("Keep my amounts", key=f"rc_no{pid}", width="stretch"):
-                    for k_ in (f"b{pid}", f"w{pid}", f"e{pid}"):
+                    for k_ in (fresh(f"b{pid}", p["blend"]), fresh(f"w{pid}", float(p["green_weight_g"])),
+                               fresh(f"e{pid}", bool(p["ecocure"]))):
                         st.session_state.pop(k_, None)
                     st.rerun()
 
@@ -1301,7 +1306,7 @@ def chamber_section():
             st.markdown("**Straight from the hub**")
             st.caption("The hub keeps the last 24 hours. A daily scheduled sync (see docs/NAS.md) keeps the history "
                        "complete. It fills every drying batch that has a Tapo sensor name (above)"
-                       + ("." if ch["tapo_name"] else "; this batch has none yet."))
+                       + ("." if tapo_sync.hub_fed(ch) else "; this batch has none yet."))   # full audit #7
             if st.button("Sync last 24 h from hub", key=f"tapohub{pid}"):
                 with st.spinner("Reading the hub..."):
                     res = tapo_sync.sync(con)

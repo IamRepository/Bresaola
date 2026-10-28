@@ -101,7 +101,7 @@ def test_caption_from_the_day0_screen(env):
     at.run()
     next(b for b in at.button if b.key == "rail_day0").click()
     at.run()
-    next(t for t in at.text_input if t.key == f"phc{ph}").input("rub before bagging")
+    next(t for t in at.text_input if (t.key or "").split("@")[0] == f"phc{ph}").input("rub before bagging")
     at.run()
     next(b for b in at.button if b.key == f"phs{ph}").click()
     at.run()

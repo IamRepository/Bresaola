@@ -104,7 +104,7 @@ def test_legacy_cure_method_folded_into_notes(tmp_path, monkeypatch):
 def test_day0_with_blend_missing_from_list(env):
     sql(env, "UPDATE project SET blend='Spicy Calabrian v1' WHERE id=1")
     at = start("day0")
-    sb = next(s for s in at.selectbox if s.key == "b1")
+    sb = next(s for s in at.selectbox if (s.key or "").split("@")[0] == "b1")
     assert sb.value == "Spicy Calabrian v1"
 
 
@@ -155,7 +155,7 @@ def test_bag_date_not_before_start_date(tmp_path, monkeypatch):
 
 def test_start_date_changed_from_sidebar(env):
     at = start()
-    next(d for d in at.date_input if d.key == "sd1").set_value(date(2026, 8, 14))
+    next(d for d in at.date_input if (d.key or "").split("@")[0] == "sd1").set_value(date(2026, 8, 14))
     at.run()
     next(b for b in at.button if b.label == "Change start date").click()
     at.run()

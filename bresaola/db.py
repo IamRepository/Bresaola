@@ -205,44 +205,57 @@ def connect(path: str | Path) -> sqlite3.Connection:
     return con
 
 
+_TODO_SPLIT = """SELECT p.id pid, p.chamber_id ch FROM project p JOIN chamber c ON c.id = p.chamber_id
+                 WHERE c.project_id IS NULL OR c.project_id != p.id
+                 ORDER BY CASE WHEN p.status != 'closed' AND p.dry_start IS NOT NULL AND p.dry_locked_at IS NULL
+                          THEN 0 ELSE 1 END, p.id"""
+
+
 def _split_shared_chambers(con, path) -> None:
     """v0.4.17: one sensor per piece of meat, so each batch owns its readings. A chamber used by one
     batch becomes that batch's; a chamber shared by several is copied (readings and left-out periods)
-    so each batch has its own. A copy of the database file is made once before anything changes."""
-    todo = con.execute("""SELECT p.id pid, p.chamber_id ch, c.project_id owner FROM project p
-                          JOIN chamber c ON c.id = p.chamber_id
-                          WHERE c.project_id IS NULL OR c.project_id != p.id ORDER BY p.id""").fetchall()
-    if not todo:
+    so each batch has its own. The batch drying now keeps the original chamber (older TAPO_SENSORS
+    setups name it), the others get copies. A copy of the database file is made before anything changes.
+    Runs under a write lock, so two processes opening the database at once can't both convert
+    (full audit 28 Oct 2026, #2, #3, #5)."""
+    if not con.execute(_TODO_SPLIT).fetchone():
         return
     con.commit()
     if str(path) != ":memory:" and Path(str(path)).exists():
-        keep = Path(str(path)).with_name(Path(str(path)).stem + "-before-v0.4.17.sqlite")
-        if not keep.exists():
-            try:
-                dst = sqlite3.connect(str(keep))
-                con.backup(dst)
-                dst.close()
-            except (sqlite3.Error, OSError):    # e.g. disk full: no copy, so no conversion this time;
-                keep.unlink(missing_ok=True)    # the app keeps working as before and tries again later
-                return
-    with con:
-        for r in todo:
-            owner = con.execute("SELECT project_id FROM chamber WHERE id=?", (r["ch"],)).fetchone()[0]
-            if owner is None:                        # first batch on this chamber: it becomes its own
-                con.execute("UPDATE chamber SET project_id=? WHERE id=?", (r["pid"], r["ch"]))
+        keep = Path(str(path)).with_name(f"{Path(str(path)).stem}-before-v0.4.17-{now_local():%Y%m%d-%H%M%S}.sqlite")
+        try:
+            dst = sqlite3.connect(str(keep))
+            con.backup(dst)
+            dst.close()
+        except (sqlite3.Error, OSError):        # e.g. disk full: no copy, so no conversion this time;
+            keep.unlink(missing_ok=True)        # the app keeps working as before and tries again later
+            return
+    con.execute("BEGIN IMMEDIATE")                  # other connections wait; then re-check what is left
+    try:
+        for r in con.execute(_TODO_SPLIT).fetchall():
+            cur = con.execute("SELECT c.id, c.project_id FROM project p JOIN chamber c ON c.id = p.chamber_id "
+                              "WHERE p.id=?", (r["pid"],)).fetchone()
+            if cur["project_id"] == r["pid"]:       # done meanwhile
                 continue
-            src = con.execute("SELECT * FROM chamber WHERE id=?", (r["ch"],)).fetchone()
+            if cur["project_id"] is None:           # first batch on this chamber: it becomes its own
+                con.execute("UPDATE chamber SET project_id=? WHERE id=?", (r["pid"], cur["id"]))
+                continue
+            src = con.execute("SELECT * FROM chamber WHERE id=?", (cur["id"],)).fetchone()
             name = _free_chamber_name(con, project(con, r["pid"])["name"] + " sensor")
             new = con.execute("INSERT INTO chamber (name, sensor, notes, kind, project_id, tapo_name) "
                               "VALUES (?,?,?,?,?,?)", (name, src["sensor"], src["notes"], src["kind"],
                                                        r["pid"], src["tapo_name"])).lastrowid
             con.execute("""INSERT INTO chamber_reading (chamber_id, ts, temp_c, rh_pct, source)
                            SELECT ?, ts, temp_c, rh_pct, source FROM chamber_reading WHERE chamber_id=?""",
-                        (new, r["ch"]))
+                        (new, cur["id"]))
             con.execute("""INSERT INTO chamber_exclusion (chamber_id, start_ts, end_ts, created_at)
                            SELECT ?, start_ts, end_ts, created_at FROM chamber_exclusion WHERE chamber_id=?""",
-                        (new, r["ch"]))
+                        (new, cur["id"]))
             con.execute("UPDATE project SET chamber_id=? WHERE id=?", (new, r["pid"]))
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
 
 
 def _free_chamber_name(con, base: str) -> str:
@@ -707,6 +720,8 @@ def set_drying(con, pid: int, *, start, start_gross_g: float, chamber_id: int | 
                    tare_estimated=?, target_loss_pct=?, dry_note=? WHERE id=?""",
                 (_iso(start), start_gross_g, chamber_id, tare_g, int(tare_estimated),
                  target_loss_pct, note, pid))
+    if chamber_id is not None:          # v0.4.17: an unowned chamber becomes this batch's at once
+        con.execute("UPDATE chamber SET project_id=? WHERE id=? AND project_id IS NULL", (pid, chamber_id))
     con.execute("INSERT OR REPLACE INTO reading (project_id, day, gross_g, note) VALUES (?,?,?,?)",
                 (pid, _iso(start), start_gross_g, "Start of drying"))
 

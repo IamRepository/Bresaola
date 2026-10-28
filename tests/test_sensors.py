@@ -304,4 +304,4 @@ def test_chamber_charts_visible_without_opening_anything(con, monkeypatch):
     settings = next(e for e in at.expander if e.label == "Sensor settings, import and remove")
     assert not any(b.key == "chview1" for b in settings.button_group)           # chart controls outside
     assert any(b.key == "chview1" for b in at.button_group)
-    assert any(b.key == "chkind1" for b in settings.button_group)               # type setting folded away
+    assert any((b.key or "").split("@")[0] == "chkind1" for b in settings.button_group)               # type setting folded away

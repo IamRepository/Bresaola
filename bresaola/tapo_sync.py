@@ -132,6 +132,14 @@ def targets(con) -> list[tuple[str, str, int | None, str | None]]:
         seen.add(r["id"])
     for name, nick in sensor_map().items():
         ch, err = find_chamber(con, name)
+        if ch is not None and not err and not con.execute(
+                """SELECT 1 FROM chamber c JOIN project p ON p.id = c.project_id WHERE c.id=?
+                   AND p.dry_start IS NOT NULL AND p.dry_locked_at IS NULL AND p.status != 'closed'""",
+                (ch,)).fetchone():
+            # v0.4.17: readings belong to one batch; never feed a finished or unowned table
+            # (full audit 28 Oct 2026, #3)
+            err = (f"'{name}' is not the sensor table of a batch that is drying. Set the Tapo sensor "
+                   "name in that batch's Dry step instead.")
         if ch not in seen:
             out.append((name, nick, ch, err))
             seen.add(ch)

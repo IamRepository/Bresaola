@@ -158,7 +158,7 @@ def test_project_switch_works_every_time(at):
 def test_blend_switch_does_not_carry_table_edits(at, tmp_path):
     from streamlit.proto.WidgetStates_pb2 import WidgetState  # noqa: F401  (proto import check)
     new_project(at, "X", 1000)
-    next(s for s in at.selectbox if s.key == "b2").set_value("Spicy Calabrian")
+    next(s for s in at.selectbox if (s.key or "").split("@")[0] == "b2").set_value("Spicy Calabrian")
     run(at)
 
     def editor_id():
@@ -185,7 +185,7 @@ def test_blend_switch_does_not_carry_table_edits(at, tmp_path):
 
     run_with_edit()                                            # 9.9 g typed for Fennel, not saved
     old = editor_id()
-    next(s for s in at.selectbox if s.key == "b2").set_value("Bresaola della Valtellina")
+    next(s for s in at.selectbox if (s.key or "").split("@")[0] == "b2").set_value("Bresaola della Valtellina")
     run(at)
     assert editor_id() != old                                  # fresh table for the new blend
     btn(at, "Save").click()

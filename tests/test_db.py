@@ -114,7 +114,9 @@ def test_timestamps_use_local_timezone(monkeypatch):
     assert db.TZ.key == "Europe/Berlin"
 
 
-def test_delete_project_removes_rows_but_keeps_chamber(con):
+def test_delete_project_removes_its_rows_and_own_sensor_readings(con):
+    """v0.4.17: each batch owns its sensor table (set_drying claims an unowned chamber at once),
+    so deleting the batch deletes its readings too."""
     ch = db.get_or_create_chamber(con, "Fridge drawer")
     pid = db.create_project(con, "A", "Spicy Calabrian", False, 2088, start_date=date(2026, 8, 1))
     db.set_drying(con, pid, start=date(2026, 9, 20), start_gross_g=2100, chamber_id=ch)
@@ -123,7 +125,7 @@ def test_delete_project_removes_rows_but_keeps_chamber(con):
     assert db.delete_project(con, pid) == ["photos/1/x.jpg"]
     for t in ("project", "ingredient_line", "reading", "photo", "project_event"):
         assert con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] == 0, t
-    assert con.execute("SELECT COUNT(*) FROM chamber_reading").fetchone()[0] == 1
+    assert con.execute("SELECT COUNT(*) FROM chamber_reading").fetchone()[0] == 0
 
 
 def test_old_database_gets_new_columns(tmp_path):

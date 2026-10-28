@@ -66,8 +66,8 @@ def test_stale_tab_does_not_undo_day0_changes(env):
     assert (p["green_weight_g"], p["ecocure"]) == (2500, 1)
     assert [e["kind"] for e in db.events(env, pid)].count("curing_salt_changed") <= 1   # no flip back
     # and it now shows the database's values
-    assert next(n for n in tab_a.number_input if n.key == f"w{pid}").value == 2500
-    assert next(t for t in tab_a.toggle if t.key == f"e{pid}").value is True
+    assert next(n for n in tab_a.number_input if (n.key or "").split("@")[0] == f"w{pid}").value == 2500
+    assert next(t for t in tab_a.toggle if (t.key or "").split("@")[0] == f"e{pid}").value is True
 
 
 def test_stale_tab_does_not_undo_chamber_type(env):
@@ -86,7 +86,7 @@ def test_stale_note_is_refreshed(env):
         db.set_dry_note(env, 1, "written on the phone")
     next(b for b in tab_a.button if b.key == "rail_dry").click()
     tab_a.run()
-    assert next(t for t in tab_a.text_area if t.key == "note_dry1").value == "written on the phone"
+    assert next(t for t in tab_a.text_area if (t.key or "").split("@")[0] == "note_dry1").value == "written on the phone"
 
 
 # 2: ending drying below the target needs a confirmation, is logged and shown in the app and the PDF

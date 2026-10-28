@@ -277,7 +277,7 @@ def test_finish_close_needs_all_locked(app):
 
 
 def test_rename_from_sidebar_menu(app):
-    next(t for t in app.text_input if t.key == "rn1").input("Palermo Hot")
+    next(t for t in app.text_input if (t.key or "").split("@")[0] == "rn1").input("Palermo Hot")
     app.run()
     btn(app, "Rename").click()
     app.run(); ok(app)

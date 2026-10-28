@@ -36,7 +36,7 @@ def day0(pid):
 
 
 def switch_off(at, pid):
-    next(t for t in at.toggle if t.key == f"e{pid}").set_value(False)
+    next(t for t in at.toggle if (t.key or "").split("@")[0] == f"e{pid}").set_value(False)
     at.run()
     assert not at.exception, at.exception
 
@@ -57,7 +57,7 @@ def test_keep_ecocure_changes_nothing(env):
     next(b for b in at.button if b.key == f"nocure_no{pid}").click()
     at.run()
     assert db.project(con, pid)["ecocure"] == 1
-    assert next(t for t in at.toggle if t.key == f"e{pid}").value is True
+    assert next(t for t in at.toggle if (t.key or "").split("@")[0] == f"e{pid}").value is True
 
 
 def test_confirm_switches_ecocure_off(env):
@@ -75,7 +75,7 @@ def test_switching_ecocure_on_needs_no_question(env):
     with con:
         db.update_spice_inputs(con, pid, green_weight_g=2000, ecocure=False)
     at = day0(pid)
-    next(t for t in at.toggle if t.key == f"e{pid}").set_value(True)
+    next(t for t in at.toggle if (t.key or "").split("@")[0] == f"e{pid}").set_value(True)
     at.run()
     assert db.project(con, pid)["ecocure"] == 1
 
@@ -92,5 +92,5 @@ def test_ecocure_toggle_explains_it_is_the_creation_choice(env):
     """v0.4.13 (owner, 28 Oct): the Day 0 toggle looked like a second, separate question."""
     con, pid = env
     at = day0(pid)
-    t = next(t for t in at.toggle if t.key == f"e{pid}")
+    t = next(t for t in at.toggle if (t.key or "").split("@")[0] == f"e{pid}")
     assert "Chosen when you created the project" in t.help and "switching it off asks first" in t.help
