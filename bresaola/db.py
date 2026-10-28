@@ -218,9 +218,13 @@ def _split_shared_chambers(con, path) -> None:
     if str(path) != ":memory:" and Path(str(path)).exists():
         keep = Path(str(path)).with_name(Path(str(path)).stem + "-before-v0.4.17.sqlite")
         if not keep.exists():
-            dst = sqlite3.connect(str(keep))
-            con.backup(dst)
-            dst.close()
+            try:
+                dst = sqlite3.connect(str(keep))
+                con.backup(dst)
+                dst.close()
+            except (sqlite3.Error, OSError):    # e.g. disk full: no copy, so no conversion this time;
+                keep.unlink(missing_ok=True)    # the app keeps working as before and tries again later
+                return
     with con:
         for r in todo:
             owner = con.execute("SELECT project_id FROM chamber WHERE id=?", (r["ch"],)).fetchone()[0]
@@ -250,11 +254,14 @@ def _free_chamber_name(con, base: str) -> str:
 
 def project_chamber(con, pid: int, kind: str = "fridge", tapo_name: str | None = None) -> int:
     """The batch's own sensor table, created on first use (drying start)."""
-    row = con.execute("SELECT id FROM chamber WHERE project_id=?", (pid,)).fetchone()
-    if row:
-        return row["id"]
     if kind not in ("fridge", "chamber"):
         raise ValueError("Kind must be 'fridge' or 'chamber'")
+    row = con.execute("SELECT id FROM chamber WHERE project_id=?", (pid,)).fetchone()
+    if row:                                    # already has one: apply what was chosen now
+        con.execute("UPDATE chamber SET kind=? WHERE id=?", (kind, row["id"]))
+        if (tapo_name or "").strip():
+            set_tapo_name(con, row["id"], tapo_name)
+        return row["id"]
     name = _free_chamber_name(con, project(con, pid)["name"] + " sensor")
     return con.execute("INSERT INTO chamber (name, kind, project_id, tapo_name) VALUES (?,?,?,?)",
                        (name, kind, pid, (tapo_name or "").strip() or None)).lastrowid

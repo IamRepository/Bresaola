@@ -222,3 +222,50 @@ def test_pdf_says_where_it_dried(env):
         db.set_tapo_name(env, 1, "Palermo T315")
     t = " ".join(" ".join(pg.extract_text() for pg in PdfReader(io.BytesIO(report.build_pdf(env, 1))).pages).split())
     assert "Dried in a fridge, sensor Palermo T315." in t
+
+
+# ---- diff audit v0.4.17 ----------------------------------------------------------------------
+
+def test_no_false_gap_before_the_first_reading():
+    rows = [{"ts": (datetime(2026, 9, 20, 14) + timedelta(minutes=15 * i)).isoformat()} for i in range(40)]
+    assert sensors.gaps(rows, datetime(2026, 9, 20), datetime(2026, 9, 22)) == []
+
+
+def test_delete_warning_mentions_sensor_readings(env):
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    assert any("sensor readings" in c.value and "Removes the project" in c.value for c in at.sidebar.caption)
+
+
+def test_drying_start_applies_type_to_an_existing_sensor_table(env):
+    with env:
+        pid = db.create_project(env, "Late", "Classic Italian", False, 1000, start_date=TODAY)
+        ch = db.project_chamber(env, pid, "fridge")
+        assert db.project_chamber(env, pid, "chamber", "T315") == ch
+    row = env.execute("SELECT kind, tapo_name FROM chamber WHERE id=?", (ch,)).fetchone()
+    assert (row["kind"], row["tapo_name"]) == ("chamber", "T315")
+
+
+def test_failed_safety_copy_skips_the_conversion(env, tmp_path, monkeypatch):
+    rome = second_batch_on_same_chamber(env)
+    env.close()
+    real = db.sqlite3.connect
+
+    def no_copy(path, *a, **k):
+        if str(path).endswith("-before-v0.4.17.sqlite"):
+            raise db.sqlite3.OperationalError("disk full")
+        return real(path, *a, **k)
+    monkeypatch.setattr(db.sqlite3, "connect", no_copy)
+    con = db.connect(storage.db_path())                    # starts, data as before
+    assert db.project(con, rome)["chamber_id"] == 1
+    assert not (tmp_path / "bresaola-before-v0.4.17.sqlite").exists()
+
+
+def test_hub_sync_with_nothing_to_sync_says_so(env, monkeypatch):
+    for k, v in (("TAPO_USERNAME", "u"), ("TAPO_PASSWORD", "p"), ("TAPO_HUB_IP", "1.2.3.4")):
+        monkeypatch.setenv(k, v)
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    next(b for b in at.button if b.key == "tapohub1").click()
+    at.run()
+    assert any("No batch is drying with a Tapo sensor name" in t.value for t in at.toast)

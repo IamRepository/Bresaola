@@ -291,13 +291,10 @@ def existing_times(con, chamber_id: int, source: str, rows) -> set[str]:
 
 
 def gaps(chamber_rows, start: datetime, end: datetime, min_hours: float = 6) -> list[tuple[datetime, datetime]]:
-    """Stretches of at least `min_hours` between start and the last reading without any reading
-    (sensor offline or readings removed). The time after the last reading is not a gap: it is simply
-    not imported yet. Each gap runs from the reading before it to the reading after it."""
-    ts = sorted(t for t in (datetime.fromisoformat(r["ts"]) for r in chamber_rows) if start <= t <= end)
-    if not ts:
-        return []
-    pts = [start] + ts
+    """Stretches of at least `min_hours` between two readings (sensor offline or readings removed).
+    Before the first and after the last reading is not a gap: the sensor wasn't there yet, or the data
+    is not imported yet (diff audit v0.4.17). Each gap runs from the reading before to the one after."""
+    pts = sorted(t for t in (datetime.fromisoformat(r["ts"]) for r in chamber_rows) if start <= t <= end)
     lim = timedelta(hours=min_hours)
     return [(a, b) for a, b in zip(pts, pts[1:]) if b - a >= lim]
 

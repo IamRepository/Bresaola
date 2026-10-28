@@ -253,7 +253,7 @@ with st.sidebar:
                          disabled=sp["status"] == "closed" or new_start == d(sp["start_date"])):
                 act(db.set_start_date, pid, new_start, success="Start date changed")
             st.markdown('<hr class="pop-sep"><p class="pop-h">Delete</p>', unsafe_allow_html=True)
-            st.caption("Removes the project, its weigh-ins and photos for good. Download a backup first.")
+            st.caption("Removes the project, its weigh-ins, photos and sensor readings for good. Download a backup first.")
             confirm = st.text_input(f"Type **{md(sp['name'])}** to confirm", key=f"del{pid}")
             if st.button("Delete project permanently", disabled=confirm.strip() != sp["name"],
                          key=f"delb{pid}", width="stretch"):
@@ -1306,7 +1306,10 @@ def chamber_section():
                 with st.spinner("Reading the hub..."):
                     res = tapo_sync.sync(con)
                 errs = [f"{md(r.chamber)}: {md(r.error)}" for r in res if r.error]
-                if errs:
+                if not res:
+                    st.session_state["flash_error"] = ("No batch is drying with a Tapo sensor name: "
+                                                       "add it under Sensor settings first.")
+                elif errs:
                     st.session_state["flash_error"] = "Hub sync failed. " + "; ".join(errs)
                 else:
                     st.session_state["flash"] = "; ".join(f"{md(r.chamber)}: {r.stored} readings"
