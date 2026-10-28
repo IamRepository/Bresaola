@@ -353,19 +353,7 @@ if pid is None:
 
 p = db.project(con, pid)
 closed = p["status"] == "closed"
-st.header(md(db.display_name(p)))
-facts = [p["blend"], f"{p['green_weight_g']:.0f} g raw meat after trimming",
-         "EcoCure #2" if p["ecocure"] else "no EcoCure", f"started {d(p['start_date']):%d %b %Y}"]
-if closed:
-    facts.append(f"closed {d(p['closed_at'][:10]):%d %b %Y}")
-st.caption(",  ".join(facts))
 KIND = db.chamber_kind(con, p)          # 'fridge', 'chamber' or None before drying
-if not p["ecocure"]:
-    dry_rows = (db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"])
-                if p["chamber_id"] and p["dry_start"] else [])
-    level, text = safety.no_cure_message(KIND, dry_rows)
-    (st.warning if level == "warning" else st.info)(text, icon=":material/warning:" if level == "warning"
-                                                      else ":material/info:")
 
 # --------------------------------------------------------------------------- #
 # journey rail
@@ -456,7 +444,15 @@ if st.session_state[step_key] not in STEPS:
     st.session_state[step_key] = current
 sel = st.session_state[step_key]
 
+# title, facts and the step rail stay at the top while the page scrolls (owner, 28 Oct 2026);
+# messages (no curing salt, weigh today ...) come below and scroll with the page
 with st.container(key="rail"):
+    st.header(md(db.display_name(p)))
+    facts = [p["blend"], f"{p['green_weight_g']:.0f} g raw meat after trimming",
+             "EcoCure #2" if p["ecocure"] else "no EcoCure", f"started {d(p['start_date']):%d %b %Y}"]
+    if closed:
+        facts.append(f"closed {d(p['closed_at'][:10]):%d %b %Y}")
+    st.caption(",  ".join(facts))
     cols = st.columns(4)
     css = []
     for i, s in enumerate(STEPS):
@@ -479,7 +475,28 @@ with st.container(key="rail"):
         if s == sel:
             col = GREEN if done[s] else RED
             css.append(f"{k} {{ box-shadow: inset 0 -4px 0 {col} !important; }} {k} p {{ font-weight:700; }}")
+    # Streamlit wraps the container in a layout wrapper of the same height: that wrapper must stick.
+    # On narrow screens the 4 steps stack, so a fixed top would fill the screen: it scrolls there.
+    css.append(f'div[data-testid="stLayoutWrapper"]:has(> .st-key-rail) {{ position: sticky; top: 3.75rem; '
+               f'z-index: 100; background: {SURFACE}; padding: .25rem 0 .6rem; border-bottom: 1px solid {LINE}; }}'
+               f'@media (max-width: 700px) {{ div[data-testid="stLayoutWrapper"]:has(> .st-key-rail) '
+               f'{{ position: static; border-bottom: 0; }} }}'
+               f'header[data-testid="stHeader"] {{ background: {SURFACE}; }}')   # no content showing above it
+    # compact (owner chose variant B, 28 Oct 2026): smaller title and buttons, one status line per step;
+    # the fixed part is 163 px instead of 234 px. The previous design is on branch design/before-sticky-top.
+    css.append(".st-key-rail h2 { font-size: 1.45rem !important; padding: .1rem 0 0 !important; margin: 0 !important; }"
+               ".st-key-rail [data-testid='stCaptionContainer'] { margin-top: 0; }"
+               ".st-key-rail [data-testid='stHeadingWithActionElements'] { margin-bottom: 0 !important; }"
+               ".st-key-rail button { min-height: 2.2rem !important; padding: .2rem .5rem !important; }"
+               ".st-key-rail .stat .more { display: none; }")
     st.markdown("<style>" + "\n".join(css) + "</style>", unsafe_allow_html=True)
+
+if not p["ecocure"]:
+    dry_rows = (db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"])
+                if p["chamber_id"] and p["dry_start"] else [])
+    level, text = safety.no_cure_message(KIND, dry_rows)
+    (st.warning if level == "warning" else st.info)(text, icon=":material/warning:" if level == "warning"
+                                                      else ":material/info:")
 
 
 def next_action() -> tuple[str | None, bool]:
