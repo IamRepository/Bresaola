@@ -488,7 +488,7 @@ with st.container(key="rail"):
                ".st-key-rail [data-testid='stCaptionContainer'] { margin-top: 0; }"
                ".st-key-rail [data-testid='stHeadingWithActionElements'] { margin-bottom: 0 !important; }"
                ".st-key-rail button { min-height: 2.2rem !important; padding: .2rem .5rem !important; }"
-               ".st-key-rail .stat .more { display: none; }")
+               ".st-key-rail .stat .more:not(.due) { display: none; }")   # warnings (red) stay visible
     st.markdown("<style>" + "\n".join(css) + "</style>", unsafe_allow_html=True)
 
 if not p["ecocure"]:

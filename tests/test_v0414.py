@@ -34,3 +34,9 @@ def test_header_and_rail_in_one_sticky_block_messages_below(tmp_path, monkeypatc
     i_cure = next(i for i, t in enumerate(texts) if t.startswith("No curing salt"))
     i_weigh = next(i for i, t in enumerate(texts) if "Weigh today" in t)
     assert i_title < i_rail < i_cure < i_weigh
+
+
+def test_compact_rail_keeps_warning_lines():
+    """Diff audit v0.4.14 (Low): hiding every second status line also hid 'ended below target'."""
+    src = Path(APP).read_text()
+    assert ".st-key-rail .stat .more:not(.due) { display: none; }" in src
