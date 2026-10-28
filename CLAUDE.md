@@ -22,7 +22,8 @@ When a trigger applies, say so and recommend a full audit; the owner decides.
 
 **Last full audit:** 27 Oct 2026 on v0.4.8 (commit b00fd60): 10 findings (2 High), 1-8 + 10 fixed in v0.4.9, 9 accepted
 (DST hour split across two hub syncs). Cost: 254k tokens, about 2 % of the owner's usage. Before that: 26 Oct 2026 on v0.4.2.
-**Last diff audit:** 28 Oct 2026, 6dfbfd7..3b41432 (v0.4.13 + v0.4.14 sticky compact header): no High/Medium (85k tokens);
+**Last diff audit:** 28 Oct 2026, 82bd135..bbd3a99 (v0.4.15, footnotes + target label): no High/Medium (80k tokens).
+Before that: 28 Oct 2026, 6dfbfd7..3b41432 (v0.4.13 + v0.4.14 sticky compact header): no High/Medium (85k tokens);
 Low (warning status lines hidden) fixed after. Before that: 28 Oct 2026, 41b979e..v0.4.13 (help text only): reviewed directly, no sub-audit for a one-string change.
 Before that: 28 Oct 2026, c668ec1..67f9309 (v0.4.12, scale logo + EcoCure switch-off confirmation): no High/Medium (79k tokens).
 Before that: 27 Oct 2026, 6de43a5..77beff4 (v0.4.11, backlog: recent-pace finish, left-aligned table, small fixes): no High/Medium (86k tokens).
