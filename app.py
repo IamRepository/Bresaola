@@ -23,7 +23,10 @@ from bresaola import __version__, calc, db, report, safety, sensors, storage, ta
 from bresaola.blends import BLENDS
 from bresaola.demo import seed_demo
 
-st.set_page_config(page_title="Bresaola Tracker", page_icon="🥩", layout="wide")
+# logo: Material Symbols icon, same style as the owner's other apps (BBQ Chart to Data, BBQ dashboard,
+# Brisket Analyzer); takes the text colour, so it follows dark mode. Chosen 28 Oct 2026: option D of 12.
+APP_ICON = ":material/scale:"
+st.set_page_config(page_title="Bresaola Tracker", page_icon=APP_ICON, layout="wide")
 
 # Light/dark follows Streamlit's own theme (switched with the sidebar toggle, stored in the browser).
 DARK = getattr(getattr(st.context, "theme", None), "type", "light") == "dark"
@@ -208,7 +211,7 @@ if "photos_shrunk" not in st.session_state:          # one-off tidy-up of photos
 # --------------------------------------------------------------------------- #
 
 with st.sidebar:
-    st.title("Bresaola Tracker")
+    st.title(f"{APP_ICON} Bresaola Tracker")
     st.caption(f"v{__version__}  \nCredit to Eric Pousson from 2 Guys & A Cooler")
 
     projs = db.projects(con)
@@ -659,7 +662,21 @@ def step_day0():
                     db.change_blend(con_, pid_, new_b)
                 db.update_spice_inputs(con_, pid_, green_weight_g=new_w, ecocure=new_e)
 
-            if changed and not db.actuals_edited(con, pid):
+            edited = db.actuals_edited(con, pid)
+            if changed and p["ecocure"] and not new_e:
+                # switching curing salt off is a food-safety choice: confirm it (owner, 28 Oct 2026)
+                pending = True
+                st.warning("**Switch off EcoCure #2?** Without curing salt (nitrite) this batch's protection rests "
+                           f"on the 3 % salt and on drying in a fridge kept below {safety.TEMP_MAX['fridge']:g} °C."
+                           + (" Your actual amounts and notes are also **replaced by the new plan**." if edited else ""))
+                c1, c2, _ = st.columns([1.6, 1, 2])
+                if c1.button("Yes, without curing salt", type="primary", key=f"nocure_ok{pid}", width="stretch"):
+                    act(apply_recipe_change, pid, success="EcoCure #2 switched off; plan recalculated")
+                if c2.button("Keep EcoCure #2", key=f"nocure_no{pid}", width="stretch"):
+                    for k_ in (f"b{pid}", f"w{pid}", f"e{pid}"):
+                        st.session_state.pop(k_, None)
+                    st.rerun()
+            elif changed and not edited:
                 act(apply_recipe_change, pid, success="Plan recalculated")
             elif changed:
                 pending = True
