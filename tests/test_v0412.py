@@ -86,3 +86,11 @@ def test_scale_logo(env):
     at = AppTest.from_file(APP, default_timeout=30)
     at.run()
     assert at.sidebar.title[0].value == ":material/scale: Bresaola Tracker"
+
+
+def test_ecocure_toggle_explains_it_is_the_creation_choice(env):
+    """v0.4.13 (owner, 28 Oct): the Day 0 toggle looked like a second, separate question."""
+    con, pid = env
+    at = day0(pid)
+    t = next(t for t in at.toggle if t.key == f"e{pid}")
+    assert "Chosen when you created the project" in t.help and "switching it off asks first" in t.help

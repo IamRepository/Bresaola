@@ -652,8 +652,9 @@ def step_day0():
                                 value=float(p["green_weight_g"]), key=fresh(f"w{pid}", float(p["green_weight_g"])),
                                 disabled=locked)
         new_e = c3.toggle("EcoCure #2", value=bool(p["ecocure"]), key=fresh(f"e{pid}", bool(p["ecocure"])), disabled=locked,
-                          help="Adds 1 % EcoCure #2 and lowers the salt by half its weight, "
-                               "so total salt stays at 3 %.")
+                          help="Chosen when you created the project. Change it here until day 0 is locked; "
+                               "switching it off asks first. EcoCure #2 adds 1 % curing salt and lowers the "
+                               "kosher salt by half its weight, so total salt stays at 3 %.")
         if not locked:
             changed = (new_b != p["blend"] or new_w != p["green_weight_g"] or new_e != bool(p["ecocure"]))
 
