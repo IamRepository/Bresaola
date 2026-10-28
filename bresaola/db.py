@@ -222,11 +222,15 @@ def _split_shared_chambers(con, path) -> None:
         return
     con.commit()
     if str(path) != ":memory:" and Path(str(path)).exists():
-        keep = Path(str(path)).with_name(f"{Path(str(path)).stem}-before-v0.4.17-{now_local():%Y%m%d-%H%M%S}.sqlite")
+        # pid in the name: two processes starting in the same second keep separate copies (diff audit)
+        keep = Path(str(path)).with_name(
+            f"{Path(str(path)).stem}-before-v0.4.17-{now_local():%Y%m%d-%H%M%S}-{os.getpid()}.sqlite")
         try:
             dst = sqlite3.connect(str(keep))
-            con.backup(dst)
-            dst.close()
+            try:
+                con.backup(dst)
+            finally:
+                dst.close()
         except (sqlite3.Error, OSError):        # e.g. disk full: no copy, so no conversion this time;
             keep.unlink(missing_ok=True)        # the app keeps working as before and tries again later
             return

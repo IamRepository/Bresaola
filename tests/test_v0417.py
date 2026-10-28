@@ -380,3 +380,20 @@ def test_hub_caption_counts_the_older_sensor_setup(env, monkeypatch):
     at.run()
     caps = [c.value for c in at.caption if "The hub keeps the last 24 hours" in c.value]
     assert caps and not any("none yet" in c for c in caps), caps
+
+
+def test_safety_copies_in_the_same_second_do_not_collide(env, tmp_path, monkeypatch):
+    """Diff audit of the full-audit fixes: copy names were unique only to the second."""
+    second_batch_on_same_chamber(env)
+    env.close()
+    monkeypatch.setattr(db, "now_local", lambda: datetime(2026, 10, 28, 10))
+    monkeypatch.setattr(db.os, "getpid", lambda: 111)
+    db.connect(storage.db_path()).close()
+    con = sqlite3.connect(storage.db_path())
+    con.execute("UPDATE chamber SET project_id=NULL")
+    con.execute("UPDATE project SET chamber_id=1")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(db.os, "getpid", lambda: 222)
+    db.connect(storage.db_path()).close()
+    assert len(list(tmp_path.glob("bresaola-before-v0.4.17-*.sqlite"))) == 2
