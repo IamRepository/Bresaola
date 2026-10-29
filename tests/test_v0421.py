@@ -134,3 +134,18 @@ def test_test_mode_has_demo_sensor_readings(tmp_path):
     ch = db.project(con, pid)["chamber_id"]
     assert n > 1500 and len(db.exclusions(con, ch)) == 1
     assert max(r["temp_c"] for r in db.chamber_readings(con, ch)) > 4        # the door-open hour shows up
+
+
+def test_empty_period_says_so(at):
+    """Diff audit v0.4.22: a period inside a stretch without readings drew an empty chart."""
+    con = db.connect(storage.db_path())
+    with con:
+        sensors.import_readings(con, 1, [(datetime(2026, 10, 9, h), 2.0, 80.0) for h in range(3)], "tapo_export")
+    at.run()
+    sc = next(s for s in at.segmented_control if s.label == "Average per")
+    sc.set_value("15 min")
+    at.run()
+    next(s for s in at.slider if s.label == "Period shown").set_value((datetime(2026, 10, 7), datetime(2026, 10, 8)))
+    at.run()
+    assert not at.exception, at.exception
+    assert any("No readings in the period shown" in i.value for i in at.info)

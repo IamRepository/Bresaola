@@ -24,7 +24,9 @@ When a trigger applies, say so and recommend a full audit; the owner decides.
 database; 7 findings (#1 stale tab sending old widget values back = most important), all fixed in 5ca7251 with tests.
 Cost: 239k tokens. Before that: 27 Oct 2026 on v0.4.8 (commit b00fd60): 10 findings (2 High), 1-8 + 10 fixed in v0.4.9, 9 accepted
 (DST hour split across two hub syncs). Cost: 254k tokens, about 2 % of the owner's usage. Before that: 26 Oct 2026 on v0.4.2.
-**Last diff audit:** 29 Oct 2026, 4a6b955..1470075 (v0.4.21, zoomable temperature/humidity chart): no High; 2 suspected
+**Last diff audit:** 29 Oct 2026, 20168cf..e51d886 (v0.4.22, one chart with two y-axes + period slider, demo readings
+in test mode): no High; 1 suspected Medium (empty period drew an empty chart) fixed after with test; Low key
+collision zr1{pid} vs zr{pid} fixed (110k tokens). Before that: 29 Oct 2026, 4a6b955..1470075 (v0.4.21, zoomable temperature/humidity chart): no High; 2 suspected
 Mediums fixed after with tests + browser check (window filter dropped edge segments / short windows lost the line:
 now padded by one averaging period; strip span differed from the charts: strip now has left-out bands and
 weigh-ins) (104k tokens). Before that: 29 Oct 2026, 5c28b4e..5a33946 (v0.4.20, hub sync log + stale warning): no High; 3 suspected

@@ -1102,7 +1102,7 @@ def vdt(t) -> alt.DateTime:
 def zoom_window(mn: datetime, mx: datetime) -> tuple[datetime, datetime]:
     """Period shown in the sensor chart: a slider with two handles plus quick buttons (owner, 29 Oct 2026,
     instead of the v0.4.21 strip). A window that ended at the newest reading keeps following new readings."""
-    k, kmax = f"zr{pid}", f"zrmax{pid}"
+    k, kmax = f"zr_{pid}", f"zrmax_{pid}"       # "_": pid 1's buttons must not collide with pid 11's slider
     if mx - mn < timedelta(minutes=30):
         return mn, mx
     lo, hi = st.session_state.get(k) or (mn, mx)
@@ -1119,9 +1119,9 @@ def zoom_window(mn: datetime, mx: datetime) -> tuple[datetime, datetime]:
               key=k, help="Drag the left handle for the start, the right one for the end. "
                           "The axes fit the period you choose.")
     with st.container(horizontal=True):         # one row, also on a phone (columns would stack)
-        st.button("Last 24 h", key=f"zr1{pid}", on_click=preset, args=(1,))
-        st.button("Last 7 days", key=f"zr7{pid}", on_click=preset, args=(7,))
-        st.button("All", key=f"zra{pid}", on_click=preset, args=(0,))
+        st.button("Last 24 h", key=f"zrb1_{pid}", on_click=preset, args=(1,))
+        st.button("Last 7 days", key=f"zrb7_{pid}", on_click=preset, args=(7,))
+        st.button("All", key=f"zrba_{pid}", on_click=preset, args=(0,))
     return st.session_state[k]
 
 
@@ -1174,6 +1174,8 @@ def chamber_chart(cdf, wdf, ex_in, hrs, lo, hi, gap):
     if len(wwin):
         marks.append(alt.Chart(wwin).mark_rule(color=MUTED, strokeDash=[3, 3], strokeWidth=1, clip=True).encode(
             x=x, tooltip=["Weigh-in:N"]))
+    if not (temp or hum or marks):      # a period without readings: say so instead of an empty chart
+        return None
     left = alt.layer(*marks, *(temp or []))
     if temp and hum:
         chart = alt.layer(left, alt.layer(*hum)).resolve_scale(y="independent")
@@ -1308,7 +1310,12 @@ def chamber_section():
         newest = pd.Timestamp(cr[-1]["ts"]).ceil("15min").to_pydatetime()
         chart_slot = st.empty()                  # the chart above, the slider that sets its period below
         lo, hi = zoom_window(first, newest)
-        chart_slot.altair_chart(chamber_chart(cdf, wdf, ex_in, hrs, lo, hi, gap), width="stretch")
+        chart_ = chamber_chart(cdf, wdf, ex_in, hrs, lo, hi, gap)
+        if chart_ is None:
+            chart_slot.info("No readings in the period shown. Widen it with the slider or click **All**.",
+                            icon=":material/info:")
+        else:
+            chart_slot.altair_chart(chart_, width="stretch")
         st.caption("**Red line: temperature, left axis. Green line: humidity, right axis.**  \n"
                    + ("Line: average per " + view + "; shaded: lowest to highest temperature in that period. "
                       if hrs else "Every reading as recorded. ")
