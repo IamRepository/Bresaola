@@ -70,6 +70,9 @@ Note: v0.4.9 adds table `chamber_exclusion` (left-out periods); reviewed by the 
   Kept on the owner's request (28 Oct 2026) in case he wants the old design back.
 
 ## Other rules
+- Documentation lives in the repo (`docs/`). A change to how the system works (components, data flow, schema,
+  setups, release process) updates `docs/ARCHITECTURE.md` (and `docs/NAS.md` / `docs/SETUPS.md`) in the same
+  change set; diff audits check the docs against the code (owner, 30 Oct 2026).
 - Every bug fix gets a test that fails before the fix.
 - Real data lives on the NAS (`docker/bresaola/data`); Streamlit Cloud is test-only and loses data on reboot.
 - NAS port 8520 with host networking: Synology MailPlus blocks 8500-8507 (see docs/NAS.md).
