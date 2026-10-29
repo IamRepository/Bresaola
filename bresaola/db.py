@@ -8,6 +8,7 @@ Design rules (confirmed 2026-10-08):
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from datetime import date, datetime
@@ -978,6 +979,7 @@ def delete_chamber(con, chamber_id: int) -> int:
         raise ValueError("Still used by: " + ", ".join(r["name"] for r in used))
     n = con.execute("DELETE FROM chamber_reading WHERE chamber_id=?", (chamber_id,)).rowcount
     con.execute("DELETE FROM chamber_exclusion WHERE chamber_id=?", (chamber_id,))
+    con.execute("DELETE FROM meta WHERE key IN (?, ?)", (f"hubsync_ok:{chamber_id}", f"hubsync_try:{chamber_id}"))
     if not con.execute("DELETE FROM chamber WHERE id=?", (chamber_id,)).rowcount:
         raise ValueError("That chamber no longer exists")
     return n
@@ -1029,6 +1031,7 @@ def delete_project(con, pid: int) -> list[str]:
             con.execute("DELETE FROM chamber_reading WHERE chamber_id=?", (ch,))
             con.execute("DELETE FROM chamber_exclusion WHERE chamber_id=?", (ch,))
             con.execute("DELETE FROM chamber WHERE id=?", (ch,))
+            con.execute("DELETE FROM meta WHERE key IN (?, ?)", (f"hubsync_ok:{ch}", f"hubsync_try:{ch}"))
     return paths
 
 
@@ -1071,3 +1074,25 @@ def drying_status(con, pid: int) -> dict:
         "eta": calc.recent_eta(rs, start, pct, tare),          # recent pace: the honest estimate
         "eta_all": calc.drying_eta(rs, start, pct, tare),      # straight line through all weigh-ins
     }
+
+# ---- hub sync log (v0.4.20, owner 29 Oct 2026: show when readings last came from the hub) ----------
+# Stored in the meta table, one row per chamber: no schema change.
+
+def log_hub_sync(con, chamber_id: int, *, stored: int, error: str | None, last: str | None) -> None:
+    rec = json.dumps({"at": now_local().isoformat(timespec="seconds"), "stored": stored,
+                      "error": error, "last": last})
+    con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (f"hubsync_try:{chamber_id}", rec))
+    if not error:
+        con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (f"hubsync_ok:{chamber_id}", rec))
+
+
+def hub_sync_status(con, chamber_id: int) -> tuple[dict | None, dict | None]:
+    """(last successful sync, last attempt) for this chamber, each {at, stored, error, last} or None."""
+    out = []
+    for k in ("ok", "try"):
+        row = con.execute("SELECT value FROM meta WHERE key=?", (f"hubsync_{k}:{chamber_id}",)).fetchone()
+        try:
+            out.append(json.loads(row["value"]) if row else None)
+        except (ValueError, TypeError):
+            out.append(None)
+    return out[0], out[1]

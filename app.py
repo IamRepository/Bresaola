@@ -1131,6 +1131,33 @@ def left_out_periods(ch, no_data=()):
             act(db.add_exclusion, ch["id"], lo, hi, success="Period left out")
 
 
+HUB_STALE_H = 12        # scheduled every 6 h; the hub holds 24 h: warn with half the buffer left
+
+
+def hub_status(ch):
+    """When readings last came from the hub (owner, 29 Oct 2026), and a warning if the scheduled sync
+    seems to have stopped while the batch is drying: the hub only holds 24 hours."""
+    if not (tapo_sync.is_configured() and tapo_sync.hub_fed(ch)):
+        return
+    ok, last_try = db.hub_sync_status(con, ch["id"])
+    at = lambda r_: datetime.fromisoformat(r_["at"])
+    if ok:
+        up_to = f", readings up to {datetime.fromisoformat(ok['last']):%d %b %H:%M}" if ok.get("last") else ""
+        st.caption(f"Last loaded from the hub: {at(ok):%d %b %Y %H:%M} ({ok['stored']} new "
+                   f"reading{'s' * (ok['stored'] != 1)}{up_to}).")
+    else:
+        st.caption("Not loaded from the hub yet.")
+    if last_try and last_try.get("error") and (not ok or at(last_try) > at(ok)):
+        st.warning(f"The last hub sync ({at(last_try):%d %b %H:%M}) failed: {md(last_try['error'])}",
+                   icon=":material/sync_problem:")
+    drying = p["dry_start"] and not p["dry_locked_at"] and not closed
+    if drying and ok and db.now_local() - at(ok) > timedelta(hours=HUB_STALE_H):
+        h = int((db.now_local() - at(ok)).total_seconds() // 3600)
+        st.warning(f"No readings from the hub for {h} hours. The hub holds only 24 hours: check the "
+                   "scheduled task on the NAS, or import an export from the Tapo app later.",
+                   icon=":material/schedule:")
+
+
 def chamber_section():
     """This batch's own temperature/humidity readings (v0.4.17: one sensor per piece of meat): chart,
     left-out overview, import from the Tapo app, hub sync."""
@@ -1219,6 +1246,7 @@ def chamber_section():
             st.info(n_, icon=":material/ac_unit:")
         st.caption(f"{len(cr)} readings since drying started: {'; '.join(bits)}. Last reading {fmt_date(cr[-1]['ts'][:10])} "
                    f"{cr[-1]['ts'][11:16]}.")
+    hub_status(ch)
     # overview: one line always visible (how much is left out or missing), the full list folded away
     # (owner, 29 Oct 2026: the list grew long with a weak sensor signal)
     if ex_in or no_data:
@@ -1333,10 +1361,10 @@ def chamber_section():
                     st.rerun()
         if tapo_sync.is_configured():
             st.markdown("**Straight from the hub**")
-            st.caption("The hub keeps the last 24 hours. A daily scheduled sync (see docs/NAS.md) keeps the history "
-                       "complete. It fills every drying batch that has a Tapo sensor name (above)"
+            st.caption("The hub holds only the last 24 hours. The scheduled task (docs/NAS.md, every 6 hours) "
+                       "picks them up before they are gone. It fills every drying batch that has a Tapo sensor name (above)"
                        + ("." if tapo_sync.hub_fed(ch) else "; this batch has none yet."))   # full audit #7
-            if st.button("Sync last 24 h from hub", key=f"tapohub{pid}"):
+            if st.button("Sync from hub now", key=f"tapohub{pid}"):
                 with st.spinner("Reading the hub..."):
                     res = tapo_sync.sync(con)
                 errs = [f"{md(r.chamber)}: {md(r.error)}" for r in res if r.error]
@@ -1346,7 +1374,7 @@ def chamber_section():
                 elif errs:
                     st.session_state["flash_error"] = "Hub sync failed. " + "; ".join(errs)
                 else:
-                    st.session_state["flash"] = "; ".join(f"{md(r.chamber)}: {r.stored} readings"
+                    st.session_state["flash"] = "; ".join(f"{md(r.chamber)}: {r.stored} new reading{'s' * (r.stored != 1)}"
                                                              + (f", {r.skipped} skipped (left-out or finished "
                                                                 "drying period)" if r.skipped else "") for r in res)
                 st.rerun()

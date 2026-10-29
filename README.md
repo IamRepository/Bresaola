@@ -90,7 +90,7 @@ The chamber charts can show every reading (15 min) or averages per 1, 12 or 24 h
 a shaded band from the lowest to the highest reading in each period.
 **Wrong file imported?** Dry → Chamber → *Remove readings*: pick the import, optionally a date range, confirm.
 
-With the variables set, the Dry step also shows a **Sync last 24 h from hub** button.
+With the variables set, the Dry step also shows a **Sync from hub now** button.
 Credentials stay in the environment of your own machine; they are never stored in the database or the repo.
 
 ## Backlog

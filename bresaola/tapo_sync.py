@@ -179,8 +179,19 @@ def targets(con) -> list[tuple[str, str, int | None, str | None]]:
 
 def sync(con, client_factory=None) -> list[Result]:
     """Fetch every batch's sensor and store its readings in that batch's table. Readings already
-    stored are kept (v0.4.17: data is added, never overwritten)."""
+    stored are kept (v0.4.17: data is added, never overwritten). Each batch's attempt is logged
+    (v0.4.20: the app shows when readings last came from the hub)."""
     tg = targets(con)
+    results = _sync(con, tg, client_factory)
+    with con:
+        for r, (_, _, ch_id, _) in zip(results, tg):
+            if ch_id is not None:
+                db.log_hub_sync(con, ch_id, stored=r.stored, error=r.error,
+                                last=r.last.isoformat() if r.last else None)
+    return results
+
+
+def _sync(con, tg, client_factory) -> list[Result]:
     results = [Result(label, nick, error=err) for label, nick, _, err in tg]
     nicks = sorted({nick for _, nick, ch, err in tg if ch is not None and not err})
     if not nicks:
@@ -222,7 +233,7 @@ def main() -> int:
             print(f"{r.chamber} ({r.sensor}): FAILED, {r.error}")
         else:
             span = f"{r.first:%d %b %H:%M} to {r.last:%d %b %H:%M}" if r.first else "no data"
-            print(f"{r.chamber} ({r.sensor}): {r.stored} readings, {span}"
+            print(f"{r.chamber} ({r.sensor}): {r.stored} new reading{'s' * (r.stored != 1)}, {span}"
                   + (f", {r.rejected} out of range" if r.rejected else "")
                   + (f", {r.skipped} skipped (left-out or finished drying period)" if r.skipped else ""))
     return 0 if ok else 1

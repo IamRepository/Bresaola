@@ -67,7 +67,7 @@ needs a scheduled task, twice a day.
 
         docker exec bresaola sh -c 'echo "hub=$TAPO_HUB_IP user_set=${TAPO_USERNAME:+yes} pw_set=${TAPO_PASSWORD:+yes}"'
 
-15. The Dry step now shows **Sync last 24 h from hub**: try it once. Newer hub firmware (seen on 1.7.7,
+15. The Dry step now shows **Sync from hub now**: try it once. Newer hub firmware (seen on 1.7.7,
     29 Oct 2026) closes the old port 80 and only takes an encrypted connection; from v0.4.19 the app asks
     the hub which one it uses. The Third-Party Compatibility switch in the Tapo app may stay on or off.
     If the login fails, don't retry many times: wrong passwords can lock the hub for a while.

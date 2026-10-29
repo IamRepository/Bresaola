@@ -380,7 +380,7 @@ def test_hub_caption_counts_the_older_sensor_setup(env, monkeypatch):
     monkeypatch.setenv("TAPO_SENSORS", f"{name}=Bresaola sensor")
     at = AppTest.from_file(APP, default_timeout=30)
     at.run()
-    caps = [c.value for c in at.caption if "The hub keeps the last 24 hours" in c.value]
+    caps = [c.value for c in at.caption if "The hub holds only the last 24 hours" in c.value]
     assert caps and not any("none yet" in c for c in caps), caps
 
 

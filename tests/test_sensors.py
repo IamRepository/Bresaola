@@ -200,7 +200,7 @@ def test_dry_step_shows_chamber_section(con, monkeypatch):
     assert 'class="blk">Sensor readings' in " ".join(m.value for m in at.markdown)      # v0.4.17: per batch
     assert any(e.label == "Sensor settings, import and remove" for e in at.expander)
     assert any("Import from the Tapo app" in m.value for m in at.markdown)
-    assert not any(b.label == "Sync last 24 h from hub" for b in at.button)       # not configured here
+    assert not any(b.label == "Sync from hub now" for b in at.button)       # not configured here
 
 
 # ---- the real Tapo export layout (22 Oct 2026 file) -----------------------------------

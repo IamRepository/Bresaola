@@ -99,7 +99,7 @@ def test_hub_sync_message_counts_skipped(env, monkeypatch):
     at = dry(env)
     next(b for b in at.button if b.key == "tapohub1").click()
     at.run()
-    assert any("90 readings, 6 skipped" in t.value for t in at.toast)
+    assert any("90 new readings, 6 skipped" in t.value for t in at.toast)
 
 
 # left-out period can end at 23:59
