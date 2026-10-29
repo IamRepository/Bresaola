@@ -222,12 +222,10 @@ def test_time_axes_use_one_date_format(env):
     walk(at._tree)
     xs = [layer["encoding"]["x"] for sp in specs for layer in all_layers(sp)
           if isinstance(layer.get("encoding", {}).get("x"), dict) and "axis" in layer["encoding"]["x"]]
-    fixed = [x for x in xs if x["axis"].get("values")]              # weight chart + zoom strip: one format
+    fixed = [x for x in xs if x["axis"].get("values")]              # weight chart: one format
     assert fixed and all(x["axis"]["format"] == "%d %b" for x in fixed), fixed
     weight = next(x for x in fixed if x["field"] == "Date")
     assert [v["date"] for v in weight["axis"]["values"]] == [20, 26, 30, 4, 8]     # the weigh-in days
-    strip = next(x for x in fixed if x["field"] == "Time")
-    assert [v["date"] for v in strip["axis"]["values"]][:3] == [21, 28, 5]         # every 7 days
-    # v0.4.21: the zoomable charts label midnight with the date and other ticks with the hour
+    # v0.4.21+: the zoomable sensor chart labels midnight with the date and other ticks with date + hour
     zoomed = [x for x in xs if not x["axis"].get("values")]
     assert zoomed and all("timeFormat(datum.value, '%d %b')" in x["axis"]["labelExpr"] for x in zoomed)
