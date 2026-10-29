@@ -1,4 +1,4 @@
-"""Pull chamber readings straight from a Tapo H100 hub on the home network.
+"""Pull chamber readings straight from a Tapo hub (H100, H200) on the home network.
 
 The hub keeps only the last 24 hours (15-minute averages), so run this at least once a day,
 e.g. from Windows Task Scheduler or a NAS cron job:
@@ -68,13 +68,35 @@ def records_to_rows(recs) -> list[tuple[datetime, float | None, float | None]]:
     return sensors.merge_same_time(rows)          # the repeated October hour: average, don't overwrite
 
 
+HUB_TYPES = ("Hub", "CameraHub")       # H100 / H110 report "Hub"; H200, H500 and H100 on firmware 1.7.x "CameraHub"
+
+
+async def connect_hub(client, ip: str):
+    """The hub's handler. Asks the hub first (discovery) which connection it uses: on the owner's hub
+    (firmware 1.7.7, 29 Oct 2026) port 80 is closed and only the encrypted connection on 443 works,
+    so h100(ip), which always uses port 80, timed out. Hubs that don't answer discovery: h100(ip)."""
+    if hasattr(client, "discover_devices"):
+        errors = []
+        async for r in await client.discover_devices(ip, 5):
+            try:
+                res = r.get()
+            except Exception as e:          # e.g. wrong password: report it, don't try again
+                errors.append(e)
+                continue
+            if type(res).__name__ in HUB_TYPES:
+                return res.handler
+        if errors:
+            raise errors[0]
+    return await client.h100(ip)
+
+
 async def fetch(nicknames: list[str], client_factory=None) -> dict[str, list]:
     """{sensor nickname: rows}. client_factory(username, password) lets tests pass a fake."""
     if client_factory is None:
         from tapo import ApiClient                  # imported here: optional dependency
         client_factory = ApiClient
     client = client_factory(os.environ["TAPO_USERNAME"], os.environ["TAPO_PASSWORD"])
-    hub = await client.h100(os.environ["TAPO_HUB_IP"])
+    hub = await connect_hub(client, os.environ["TAPO_HUB_IP"])
     out = {}
     for nick in nicknames:              # one wrong sensor name must not stop the others
         try:

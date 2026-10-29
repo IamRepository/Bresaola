@@ -116,6 +116,37 @@ def fake_factory(sensor):
     return Client
 
 
+def discovery_factory(sensor, kind="CameraHub", fail=None):
+    """A hub that answers discovery (firmware 1.7.x) and whose port 80 is closed."""
+    class Hub:
+        async def t31x(self, nickname=None, device_id=None):
+            assert nickname == "Bresaola sensor"
+            return sensor
+
+    res_cls = type(kind, (), {"handler": Hub()})
+
+    class Found:
+        def get(self):
+            if fail:
+                raise fail
+            return res_cls()
+
+    class Client:
+        def __init__(self, user, pw):
+            pass
+
+        async def discover_devices(self, ip, timeout_s=10):
+            assert ip == "192.168.1.50"
+
+            async def gen():
+                yield Found()
+            return gen()
+
+        async def h100(self, ip):
+            raise TimeoutError("port 80 closed")
+    return Client
+
+
 @pytest.fixture
 def tapo_env(monkeypatch):
     monkeypatch.setenv("TAPO_USERNAME", "me@example.com")
@@ -305,3 +336,16 @@ def test_chamber_charts_visible_without_opening_anything(con, monkeypatch):
     assert not any(b.key == "chview1" for b in settings.button_group)           # chart controls outside
     assert any(b.key == "chview1" for b in at.button_group)
     assert any((b.key or "").split("@")[0] == "chkind1" for b in settings.button_group)               # type setting folded away
+
+
+@pytest.mark.parametrize("kind", ["CameraHub", "Hub"])
+def test_sync_through_discovery(con, tapo_env, kind):
+    """29 Oct 2026: the owner's hub (firmware 1.7.7) has port 80 closed; discovery finds it as a
+    camera hub on the encrypted connection. Before the fix the sync always used h100(ip): timeout."""
+    res = tapo_sync.sync(con, discovery_factory(FakeSensor(), kind))
+    assert res[0].error is None and res[0].stored == 3
+
+
+def test_discovery_login_error_is_reported_once(con, tapo_env):
+    res = tapo_sync.sync(con, discovery_factory(FakeSensor(), fail=RuntimeError("TPAP_CREDENTIALS")))
+    assert "TPAP_CREDENTIALS" in res[0].error

@@ -45,40 +45,49 @@ nothing, and the two do not share data.
     `docker/bresaola/data`. The in-app **Download backup** remains a quick extra copy.
 
 ## 6. Tapo hub sync (optional)
-The H100 keeps only the last 24 hours, so this needs a daily task.
-12. Give the H100 a fixed address in your router (DHCP reservation).
-13. Create a text file `docker/bresaola/.env` (File Station → Create → text file, or upload one) with:
+The hub (H100 or H200) keeps only the last 24 hours (and nothing from before its last restart), so this
+needs a scheduled task, twice a day.
+12. Give the hub a fixed address in your router (DHCP reservation): after a restart it may get a new one.
+13. Create a text file `docker/bresaola/.env`, next to `compose.yaml` (File Station → Create → Create file,
+    name exactly `.env`, no `.txt`; Settings → **Show hidden files** to see it), with:
 
         TAPO_USERNAME=you@example.com
         TAPO_PASSWORD=your-tapo-password
         TAPO_HUB_IP=192.168.1.50
 
-    Which sensor belongs to which batch is set in the app, not here (v0.4.17: one sensor per piece of
-    meat): Dry step → **Sensor settings, import and remove** → **Tapo sensor name** (the name in the Tapo
-    app) → **Save name**. The sync fills every batch that is drying and has a name. (Older setups with
-    `TAPO_SENSORS=Fridge drawer=<name>` keep working.)
+    No spaces around `=`, no quotes. Which sensor belongs to which batch is set in the app: Dry step →
+    **Sensor settings, import and remove** → **Tapo sensor name** (exactly as in the Tapo app) → **Save name**.
+    Several batches may use the same sensor name (one sensor for both pieces): each gets its own copy.
+    (Older setups with `TAPO_SENSORS=Fridge drawer=<name>` keep working.)
 
     Don't edit `compose.yaml`: updates replace it. `.env` is never replaced, never in git and not copied
     into the image. The password sits in that file on the NAS: keep the folder private.
-14. Container Manager → Project → **bresaola** → **Action** → **Stop**, then **Build**, then **Start**.
-    The Dry step now shows **Sync last 24 h from hub**: try it once.
-15. DSM → **Control Panel** → **Task Scheduler** → **Create** → **Scheduled Task** → **User-defined script**.
-    User `root`, daily at 06:15, script:
+14. Container Manager → Project → **bresaola** → **Stop**, then **Build**: the container reads `.env` only
+    when it is built. Check (shows only whether the values are set):
+
+        docker exec bresaola sh -c 'echo "hub=$TAPO_HUB_IP user_set=${TAPO_USERNAME:+yes} pw_set=${TAPO_PASSWORD:+yes}"'
+
+15. The Dry step now shows **Sync last 24 h from hub**: try it once. Newer hub firmware (seen on 1.7.7,
+    29 Oct 2026) closes the old port 80 and only takes an encrypted connection; from v0.4.19 the app asks
+    the hub which one it uses. The Third-Party Compatibility switch in the Tapo app may stay on or off.
+    If the login fails, don't retry many times: wrong passwords can lock the hub for a while.
+16. DSM → **Control Panel** → **Task Scheduler** → **Create** → **Scheduled Task** → **User-defined script**.
+    User `root`, daily at 06:15 and a second task at 18:15 (one missed run then loses nothing), script:
 
         docker exec bresaola python -m bresaola.tapo_sync
 
     Select the task → **Run** to test; the result is in the task's log.
 
 ## 7. Updating to a new version
-16. In the app: **Download backup** first (the new version may upgrade the database when it opens it).
-17. Upload the new ZIP to `docker/bresaola` → right-click → **Extract here** → **Overwrite**. The ZIP has no
+17. In the app: **Download backup** first (the new version may upgrade the database when it opens it).
+18. Upload the new ZIP to `docker/bresaola` → right-click → **Extract here** → **Overwrite**. The ZIP has no
     `data` folder, so the database and photos are untouched. Delete the ZIP.
-18. Container Manager → Project → **bresaola** → **Action** → **Stop**, then **Build** (it starts by itself).
+19. Container Manager → Project → **bresaola** → **Action** → **Stop**, then **Build** (it starts by itself).
     The Build log must be long (`pip install`, `Successfully installed`, a few minutes). If it shows only
     "Created / Starting / Started", nothing was built: Stop → **Clean**, delete the `bresaola-tracker` image
     under **Image**, and Build again. (Before v0.4.6 the image always had the same name, so this was needed
     every time.)
-19. Check the version in the sidebar. Old `bresaola-tracker:<version>` images can be deleted under **Image**.
+20. Check the version in the sidebar. Old `bresaola-tracker:<version>` images can be deleted under **Image**.
 
 ## 8. Automatic updates from GitHub (optional, from v0.4.7)
 The NAS follows the **`stable`** branch, not `main`. New versions go to `main` first (tested on Streamlit
@@ -91,8 +100,8 @@ Note: going back restores the program, not the database. Database upgrades only 
 previous version ignores; the copy in `data/pre-update/` is there if you want the exact old state.
 
 One-time setup:
-20. Install the v0.4.7 ZIP the usual way (section 7), so `scripts/nas-update.sh` is on the NAS.
-21. Task Scheduler → **Create** → **Scheduled Task** → **User-defined script**: name `bresaola-setup`,
+21. Install the v0.4.7 ZIP the usual way (section 7), so `scripts/nas-update.sh` is on the NAS.
+22. Task Scheduler → **Create** → **Scheduled Task** → **User-defined script**: name `bresaola-setup`,
     user **root**, untick "Enabled" (run by hand), script:
 
         sh /volume1/docker/bresaola/scripts/nas-update.sh setup
@@ -100,18 +109,18 @@ One-time setup:
     Select it → **Run**. File Station now shows `docker/bresaola/deploy_key.pub`.
     (If your shared folder `docker` isn't on volume1, use the path shown in File Station →
     right-click the folder → Properties → Location.)
-22. Open `deploy_key.pub` (download it, open with Notepad), copy the one line.
+23. Open `deploy_key.pub` (download it, open with Notepad), copy the one line.
     github.com → the Bresaola repo → **Settings** → **Deploy keys** → **Add deploy key**:
     title `NAS`, paste the line, leave **Allow write access unticked** → **Add key**.
     Then delete `deploy_key.pub` from the NAS (the private key stays in /root/.ssh).
-23. Task Scheduler → **Create** → **Scheduled Task** → **User-defined script**: name `bresaola-update`,
+24. Task Scheduler → **Create** → **Scheduled Task** → **User-defined script**: name `bresaola-update`,
     user **root**, schedule daily at **04:00** (after Hyper Backup at 02:30, before a hub sync at 06:15),
     script:
 
         sh /volume1/docker/bresaola/scripts/nas-update.sh
 
     Task Settings: tick **Send run details by email** and **only when the script terminates abnormally**.
-24. Select `bresaola-update` → **Run** once now. The first run turns the folder into a git checkout and
+25. Select `bresaola-update` → **Run** once now. The first run turns the folder into a git checkout and
     rebuilds once. Check `docker/bresaola/update.log`: it should end with `OK: <version> is running`;
     a second **Run** says `up to date`.
 
