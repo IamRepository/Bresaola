@@ -1100,11 +1100,16 @@ def y_inside(fmt):
                     domain=False, title=None)   # format: constant humidity showed "80.000000"
 
 
-def chamber_chart(cdf, wdf, ex_in, hrs):
+def chamber_chart(cdf, wdf, ex_in, hrs, gap=None):
     """Temperature above humidity on one time axis, with an overview strip below (owner, 29 Oct 2026):
     drag a window on the strip to zoom both charts; the y-axes fit what is shown. Double-click resets."""
     zoom = alt.selection_interval(encodings=["x"], name="zoom")
     x_dom = alt.Scale(domain=zoom)
+    # keep one averaging period beyond each edge of the window: a plain filter dropped the segments that
+    # cross the edge, and in the 12/24 h views a short window kept 1 point and no line (diff audit v0.4.21)
+    pad = int(((gap or pd.Timedelta(hours=1)) / pd.Timedelta(milliseconds=1)))
+    in_window = (f"!zoom.Time || (time(datum.Time) >= time(zoom.Time[0]) - {pad} "
+                 f"&& time(datum.Time) <= time(zoom.Time[1]) + {pad})")
     full = time_axis(cdf["Time"].min(), cdf["Time"].max())
     rows = []
     for field, title, colour in (("t", "Temperature [°C]", RED), ("h", "Humidity [%]", GREEN)):
@@ -1126,27 +1131,37 @@ def chamber_chart(cdf, wdf, ex_in, hrs):
         if hrs:                      # lowest–highest band behind the average
             layers.append(alt.Chart(sub).mark_area(color=colour, opacity=0.15, clip=True).encode(
                 x=alt.X("Time:T", scale=x_dom), y=f"{field}_min:Q", y2=f"{field}_max:Q",
-                detail="seg:N").transform_filter(zoom))
+                detail="seg:N").transform_filter(in_window))
         layers.append(alt.Chart(sub).mark_line(
             color=colour, strokeWidth=1.6 if hrs else 1.2, clip=True,
             point=alt.OverlayMarkDef(color=colour, size=22) if hrs >= 12 else False).encode(
             x=alt.X("Time:T", title=None, axis=DETAIL_AXIS, scale=x_dom),
             y=alt.Y(f"{field}:Q", title=None, scale=alt.Scale(zero=False), axis=y_inside(fmt)),
-            detail="seg:N", tooltip=tip).transform_filter(zoom))   # filtered: the y-axis fits the window
+            detail="seg:N", tooltip=tip).transform_filter(in_window))   # filtered: the y-axis fits the window
         layers.append(alt.Chart(wdf).mark_rule(color=MUTED, strokeDash=[3, 3], strokeWidth=1, clip=True).encode(
-            x=alt.X("Time:T", scale=x_dom), tooltip=["Weigh-in:N"]).transform_filter(zoom))
+            x=alt.X("Time:T", scale=x_dom), tooltip=["Weigh-in:N"]).transform_filter(in_window))
         layers.append(alt.Chart(wdf.dropna(subset=[field])).mark_point(
             color=INK, filled=True, size=45, clip=True).encode(
             x=alt.X("Time:T", scale=x_dom), y=alt.Y(f"{field}:Q", axis=y_inside(fmt)),
-            tooltip=["Weigh-in:N", alt.Tooltip(f"{field}:Q", title="day average", format=fmt)]).transform_filter(zoom))
+            tooltip=["Weigh-in:N", alt.Tooltip(f"{field}:Q", title="day average", format=fmt)]).transform_filter(in_window))
         rows.append(alt.layer(*layers).properties(
             height=200, width="container",
             title=alt.TitleParams(title, anchor="start", fontSize=12, fontWeight="normal", color=MUTED)))
     strip_field = "t" if cdf["t"].notna().any() else "h"
-    strip = alt.Chart(cdf.dropna(subset=[strip_field])).mark_line(color=MUTED, strokeWidth=1).encode(
+    # the strip shows the same span as the charts (left-out bands and weigh-ins too), so the window can
+    # reach every part of it and you can see where to zoom (diff audit v0.4.21)
+    strip_layers = []
+    if ex_in:
+        strip_layers.append(alt.Chart(pd.DataFrame([{"a": a, "b": b} for a, b in ex_in])).mark_rect(
+            color=MUTED, opacity=0.18).encode(x=alt.X("a:T", title=None, axis=full), x2="b:T"))
+    strip_layers.append(alt.Chart(cdf.dropna(subset=[strip_field])).mark_line(color=MUTED, strokeWidth=1).encode(
         x=alt.X("Time:T", title=None, axis=full),
         y=alt.Y(f"{strip_field}:Q", title=None, axis=None, scale=alt.Scale(zero=False)),
-        detail="seg:N").add_params(zoom).properties(height=45, width="container")
+        detail="seg:N").add_params(zoom))
+    if len(wdf):
+        strip_layers.append(alt.Chart(wdf).mark_rule(color=MUTED, strokeDash=[2, 2], strokeWidth=1).encode(
+            x="Time:T"))
+    strip = alt.layer(*strip_layers).properties(height=45, width="container")
     return alt.concat(*rows, strip, columns=1, spacing=8)
 
 
@@ -1270,7 +1285,7 @@ def chamber_section():
                              "t": (match.get(d(r["day"])) or (None, None))[0],
                              "h": (match.get(d(r["day"])) or (None, None))[1]}
                             for r in db.reading_rows(con, pid)])
-        st.altair_chart(chamber_chart(cdf, wdf, ex_in, hrs), width="stretch")
+        st.altair_chart(chamber_chart(cdf, wdf, ex_in, hrs, gap), width="stretch")
         st.caption("**Zoom**: drag across the strip at the bottom, then drag the window or its edges; "
                    "double-click (double-tap) the strip to show everything again.  \n"
                    + ("Line: average per " + view + "; shaded: lowest to highest in that period. " if hrs else

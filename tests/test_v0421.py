@@ -55,7 +55,11 @@ def test_one_zoomable_chart_for_temperature_and_humidity(at):
     for v in views[:2]:                                   # both detail charts follow the strip ...
         lines = [l for l in v["layer"] if (l.get("mark") or {}).get("type") == "line"]
         assert lines and lines[0]["encoding"]["x"]["scale"]["domain"] == {"param": "zoom"}
-        assert {"param": "zoom"} in [t.get("filter") for t in lines[0].get("transform", [])]   # ... y fits
+        # ... and every data layer is cut to the window plus one period each side (y fits, edges stay)
+        data_layers = [l for l in v["layer"] if (l.get("mark") or {}).get("type") in ("line", "area", "rule", "point")]
+        filters = [t.get("filter") for l in data_layers for t in l.get("transform", [])]
+        assert len(filters) == len(data_layers) and all("zoom.Time[0]) - 5400000" in f_ for f_ in filters), filters
+        assert all(f_.startswith("!zoom.Time ||") for f_ in filters)          # nothing selected: everything
     titles = [v["title"]["text"] for v in views[:2]]
     assert titles == ["Temperature [°C]", "Humidity [%]"]
 
@@ -63,7 +67,13 @@ def test_one_zoomable_chart_for_temperature_and_humidity(at):
 def test_weight_chart_not_zoomable(at):
     weight = [s for s in specs(at) if "layer" in s and any(
         (l.get("encoding", {}).get("x") or {}).get("field") == "Date" for l in s["layer"])]
-    assert weight and not any("params" in l for l in weight[0]["layer"])
+    assert weight and not any("params" in l for l in weight[0]["layer"]) and "params" not in weight[0]
+
+
+def test_strip_covers_left_out_and_weigh_ins(at):
+    strip = next(s for s in specs(at) if "concat" in s)["concat"][-1]
+    marks = [(l.get("mark") or {}).get("type") for l in strip["layer"]]
+    assert "line" in marks and "rule" in marks
 
 
 def test_zoom_hint_shown(at):
