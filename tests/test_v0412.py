@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
+from tests.helpers import pick_project
 from bresaola import db, storage
 from bresaola.demo import seed_demo
 
@@ -27,7 +28,7 @@ def env(tmp_path, monkeypatch):
 def day0(pid):
     at = AppTest.from_file(APP, default_timeout=30)
     at.run()
-    next(s for s in at.sidebar.selectbox if s.label == "Project").set_value(pid)
+    pick_project(at, pid)
     at.run()
     next(b for b in at.button if b.key == "rail_day0").click()
     at.run()

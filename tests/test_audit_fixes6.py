@@ -9,6 +9,7 @@ import pytest
 from pypdf import PdfReader
 from streamlit.testing.v1 import AppTest
 
+from tests.helpers import pick_project
 from bresaola import db, report, sensors, storage, tapo_sync
 from bresaola.demo import seed_demo
 from tests.test_sensors import FakeSensor, fake_factory
@@ -34,7 +35,7 @@ def open_app(pid=None, step=None):
     at = AppTest.from_file(APP, default_timeout=30)
     at.run()
     if pid is not None:
-        next(s for s in at.sidebar.selectbox if s.label == "Project").set_value(pid)
+        pick_project(at, pid)
         at.run()
     if step:
         next(b for b in at.button if b.key == f"rail_{step}").click()

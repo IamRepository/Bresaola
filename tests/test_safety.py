@@ -7,6 +7,7 @@ import pytest
 from pypdf import PdfReader
 from streamlit.testing.v1 import AppTest
 
+from tests.helpers import pick_project
 from bresaola import db, report, safety, sensors, storage
 from bresaola.demo import seed_demo
 
@@ -115,7 +116,7 @@ def test_lock_below_minimum_needs_confirmation_and_is_logged(con):
 def test_cure_screen_colours(con):
     pid = cured_project(con, date(2026, 9, 5))
     at = app()
-    next(s for s in at.sidebar.selectbox if s.label == "Project").set_value(pid)
+    pick_project(at, pid)
     at.run()
     next(b for b in at.button if b.key == "rail_cure").click()
     at.run()
@@ -132,7 +133,7 @@ def test_cure_screen_colours(con):
 def test_short_of_margin_is_amber_not_green(con):
     pid = cured_project(con, date(2026, 9, 11))                   # 10 days: past minimum, short of 12
     at = app()
-    next(s for s in at.sidebar.selectbox if s.label == "Project").set_value(pid)
+    pick_project(at, pid)
     at.run()
     next(b for b in at.button if b.key == "rail_cure").click()
     at.run()

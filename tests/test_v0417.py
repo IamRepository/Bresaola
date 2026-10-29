@@ -123,8 +123,9 @@ def test_overview_shows_left_out_and_missing_and_saves_a_gap(env):
     at.run()
     assert not at.exception, at.exception
     cap = " ".join(c.value for c in at.caption)
-    assert "**No readings**: 03 Oct 11:45 to 09 Oct 04:15, 5 d 16 h" in cap
-    assert cap.count("**No readings**") == 1          # after the last reading: not imported yet, no gap
+    assert "**No readings**: 03 Oct 11:45 to 09 Oct 04:15, 5 d 16 h" in cap          # in the folded list
+    assert "**No readings**: 1 gap of 6 h or more, 5 d 16 h in total" in cap        # v0.4.18 summary line
+    assert cap.count("**No readings**") == 2          # after the last reading: not imported yet, no gap
     next(b for b in at.button if b.key == "exgap1_0").click()               # "Save as left-out"
     at.run()
     assert not at.exception, at.exception
@@ -132,7 +133,8 @@ def test_overview_shows_left_out_and_missing_and_saves_a_gap(env):
     assert [(e["start_ts"], e["end_ts"]) for e in ex] == [("2026-10-03T11:46:00", "2026-10-09T04:14:00")]
     assert len(db.chamber_readings(env, ch)) == len(rows)                   # the readings around it stay
     cap = " ".join(c.value for c in at.caption)
-    assert "**Left out** (grey on the charts): 03 Oct 11:46 to 09 Oct 04:14" in cap
+    assert "**Left out** (grey on the charts): 1 period, 5 d 16 h" in cap
+    assert "**Left out**: 03 Oct 11:46 to 09 Oct 04:14" in cap
     assert "**No readings**" not in cap
     specs = []
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
+from tests.helpers import pick_project
 from bresaola import db, storage
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
@@ -138,7 +139,7 @@ def new_project(a, name, weight=1000):
 
 
 def pick(a, pid):
-    next(s for s in a.sidebar.selectbox if s.label == "Project").set_value(pid)
+    pick_project(a, pid)
     run(a)
 
 

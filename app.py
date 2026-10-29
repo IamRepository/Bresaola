@@ -216,7 +216,7 @@ with st.sidebar:
     st.caption(f"v{__version__}  \nCredit to Eric Pousson from 2 Guys & A Cooler")
 
     projs = db.projects(con)
-    labels = {p["id"]: db.display_name(p) + ("  (closed)" if p["status"] == "closed" else "") for p in projs}
+    labels = {p["id"]: db.display_name(p) for p in projs}
     if projs:
         qp = st.query_params
         if "p" in qp and "proj" not in st.session_state:     # coming back from a theme switch
@@ -227,15 +227,31 @@ with st.sidebar:
             except ValueError:
                 pass
         qp.clear()
-        # The dropdown owns the current project (key "proj"). Other code asks for a switch by
-        # setting "pid_next"; it is applied here, before the dropdown is drawn. Never pass an
-        # index: a changing index gives the widget a new identity and drops the next pick.
+        # The current project is st.session_state["proj"] (owner, 29 Oct 2026: radio buttons for the active
+        # projects, a dropdown for the closed ones). Other code asks for a switch by setting "pid_next".
+        # Both widgets are set from "proj" before they are drawn, so a stale tab can't hold an old pick;
+        # a pick in one clears the other (callbacks run before this script).
         ids = list(labels)
         if "pid_next" in st.session_state:
             st.session_state["proj"] = st.session_state.pop("pid_next")
+        active = [p_["id"] for p_ in projs if p_["status"] != "closed"]
+        done_ = [p_["id"] for p_ in projs if p_["status"] == "closed"]
         if st.session_state.get("proj") not in ids:
-            st.session_state["proj"] = ids[0]
-        pid = st.selectbox("Project", ids, key="proj", format_func=labels.get)
+            st.session_state["proj"] = (active or ids)[0]
+        cur = st.session_state["proj"]
+        st.session_state["proj_act"] = cur if cur in active else None
+        st.session_state["proj_closed"] = cur if cur in done_ else None
+
+        def picked(key):
+            if st.session_state.get(key) is not None:
+                st.session_state["proj"] = st.session_state[key]
+        if active:
+            st.radio("Active projects", active, key="proj_act", format_func=labels.get,
+                     on_change=picked, args=("proj_act",))
+        if done_:
+            st.selectbox("Closed projects", done_, key="proj_closed", format_func=labels.get,
+                         placeholder="Pick a closed project", on_change=picked, args=("proj_closed",))
+        pid = st.session_state["proj"]
         sp = db.project(con, pid)
         with st.popover("Edit or delete", icon=":material/more_horiz:", width="stretch"):
             st.markdown('<p class="pop-h">Rename</p>', unsafe_allow_html=True)
@@ -1203,14 +1219,27 @@ def chamber_section():
             st.info(n_, icon=":material/ac_unit:")
         st.caption(f"{len(cr)} readings since drying started: {'; '.join(bits)}. Last reading {fmt_date(cr[-1]['ts'][:10])} "
                    f"{cr[-1]['ts'][11:16]}.")
-    # overview, always visible: what is left out and where readings are missing
+    # overview: one line always visible (how much is left out or missing), the full list folded away
+    # (owner, 29 Oct 2026: the list grew long with a weak sensor signal)
     if ex_in or no_data:
-        st.caption("  \n".join(
-            [f"**Left out** (grey on the charts): {a:%d %b %H:%M} to {b:%d %b %H:%M}, {sensors.span_text(a, b)}"
-             for a, b in ex_in]
-            + [f"**No readings**: {a:%d %b %H:%M} to {b:%d %b %H:%M}, {sensors.span_text(a, b)}"
-               + ("" if closed else " (save it as left-out under Sensor settings if the sensor was out)")
-               for a, b in no_data]))
+        def total(ps):
+            t0 = datetime(2000, 1, 1)
+            return sensors.span_text(t0, t0 + sum((b - a for a, b in ps), timedelta()))
+        summary = []
+        if ex_in:
+            summary.append(f"**Left out** (grey on the charts): {len(ex_in)} period{'s' * (len(ex_in) != 1)}, "
+                           f"{total(ex_in)}")
+        if no_data:
+            summary.append(f"**No readings**: {len(no_data)} gap{'s' * (len(no_data) != 1)} of 6 h or more, "
+                           f"{total(no_data)} in total")
+        st.caption(" · ".join(summary))
+        with st.expander("Show the periods", key=f"gaplist{pid}"):
+            st.caption("  \n".join(
+                [f"**Left out**: {a:%d %b %H:%M} to {b:%d %b %H:%M}, {sensors.span_text(a, b)}" for a, b in ex_in]
+                + [f"**No readings**: {a:%d %b %H:%M} to {b:%d %b %H:%M}, {sensors.span_text(a, b)}" for a, b in no_data]
+                + ([] if closed or not no_data else
+                   ["Only save a gap as left-out (Sensor settings, Left-out periods) if the sensor was out of the "
+                    "fridge then; otherwise a later, fuller export can still fill it."])))
     if closed:
         return
     # fixed title + key: a changing title would make the section close on every rerun

@@ -8,6 +8,7 @@ import pytest
 from pypdf import PdfReader
 from streamlit.testing.v1 import AppTest
 
+from tests.helpers import pick_project
 from bresaola import db, report, safety, sensors, storage
 from bresaola.demo import seed_demo
 
@@ -37,7 +38,7 @@ def second_batch_ready_to_dry(con) -> int:
 def open_dry_start(pid):
     at = AppTest.from_file(APP, default_timeout=30)
     at.run()
-    next(s for s in at.sidebar.selectbox if s.label == "Project").set_value(pid)
+    pick_project(at, pid)
     at.run()
     next(b for b in at.button if b.key == "rail_dry").click()
     at.run()
