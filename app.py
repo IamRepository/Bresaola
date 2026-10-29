@@ -1150,12 +1150,22 @@ def hub_status(ch):
     if last_try and last_try.get("error") and (not ok or at(last_try) > at(ok)):
         st.warning(f"The last hub sync ({at(last_try):%d %b %H:%M}) failed: {md(last_try['error'])}",
                    icon=":material/sync_problem:")
+    # stale: judged by the newest reading that came from the hub, not by the sync time, so a sync that
+    # runs but gets nothing (sensor out of range, flat battery) warns too (diff audit v0.4.20)
     drying = p["dry_start"] and not p["dry_locked_at"] and not closed
-    if drying and ok and db.now_local() - at(ok) > timedelta(hours=HUB_STALE_H):
-        h = int((db.now_local() - at(ok)).total_seconds() // 3600)
-        st.warning(f"No readings from the hub for {h} hours. The hub holds only 24 hours: check the "
-                   "scheduled task on the NAS, or import an export from the Tapo app later.",
-                   icon=":material/schedule:")
+    if drying:
+        row = con.execute("SELECT MAX(ts) FROM chamber_reading WHERE chamber_id=? AND source=?",
+                          (ch["id"], tapo_sync.SOURCE)).fetchone()
+        newest = datetime.fromisoformat(row[0]) if row and row[0] else None
+        if newest is None:
+            st.warning("No readings from the hub yet. Click **Sync from hub now** below (Sensor settings), and "
+                       "check that the scheduled task runs on the NAS: the hub holds only 24 hours.",
+                       icon=":material/schedule:")
+        elif db.now_local() - newest > timedelta(hours=HUB_STALE_H):
+            h = int((db.now_local() - newest).total_seconds() // 3600)
+            st.warning(f"The newest reading from the hub is {h} hours old ({newest:%d %b %H:%M}). The hub holds "
+                       "only 24 hours: check the sensor's signal and the scheduled task on the NAS, or import an "
+                       "export from the Tapo app later.", icon=":material/schedule:")
 
 
 def chamber_section():

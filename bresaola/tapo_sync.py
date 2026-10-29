@@ -21,6 +21,7 @@ Needs `pip install tapo` (Python 3.11+). Not used on Streamlit Cloud, which can'
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import os
 import sys
 from dataclasses import dataclass
@@ -183,11 +184,14 @@ def sync(con, client_factory=None) -> list[Result]:
     (v0.4.20: the app shows when readings last came from the hub)."""
     tg = targets(con)
     results = _sync(con, tg, client_factory)
-    with con:
-        for r, (_, _, ch_id, _) in zip(results, tg):
-            if ch_id is not None:
-                db.log_hub_sync(con, ch_id, stored=r.stored, error=r.error,
-                                last=r.last.isoformat() if r.last else None)
+    try:                                # the readings are stored already: a busy database must not hide that
+        with con:
+            for r, (_, _, ch_id, _) in zip(results, tg):
+                if ch_id is not None:
+                    db.log_hub_sync(con, ch_id, stored=r.stored, error=r.error,
+                                    last=r.last.isoformat() if r.last else None)
+    except sqlite3.Error:
+        pass
     return results
 
 

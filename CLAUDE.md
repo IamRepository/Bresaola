@@ -24,7 +24,9 @@ When a trigger applies, say so and recommend a full audit; the owner decides.
 database; 7 findings (#1 stale tab sending old widget values back = most important), all fixed in 5ca7251 with tests.
 Cost: 239k tokens. Before that: 27 Oct 2026 on v0.4.8 (commit b00fd60): 10 findings (2 High), 1-8 + 10 fixed in v0.4.9, 9 accepted
 (DST hour split across two hub syncs). Cost: 254k tokens, about 2 % of the owner's usage. Before that: 26 Oct 2026 on v0.4.2.
-**Last diff audit:** 29 Oct 2026, 1c40a4a..5bd369c (v0.4.19, hub sync via discovery; owner's hub = H200 fw 1.7.7,
+**Last diff audit:** 29 Oct 2026, 5c28b4e..5a33946 (v0.4.20, hub sync log + stale warning): no High; 3 suspected
+Mediums fixed after with tests (stale judged by newest hub reading, not sync time; warning when never synced
+while drying; log write can't hide stored readings) (92k tokens). Before that: 29 Oct 2026, 1c40a4a..5bd369c (v0.4.19, hub sync via discovery; owner's hub = H200 fw 1.7.7,
 port 80 closed): no High; 2 suspected Mediums (discovery errors other than login blocked the port-80 fallback;
 iterator exception uncaught) fixed after with tests (102k tokens). Trigger 3 applies (hub sync): owner to decide on
 a full audit. Before that: 29 Oct 2026, 6c61d9f..523ae92 (v0.4.18, project picker radio + closed dropdown, gap list folded):
