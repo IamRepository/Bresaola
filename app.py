@@ -1088,6 +1088,68 @@ def time_axis(first, last) -> alt.Axis:
     return alt.Axis(format="%d %b", values=ticks, labelOverlap=True, title=None)
 
 
+DETAIL_AXIS = alt.Axis(title=None, labelOverlap=True, tickCount=7, labelExpr=(   # midnight: the date; else date + hour
+    "hours(datum.value) == 0 && minutes(datum.value) == 0 ? timeFormat(datum.value, '%d %b') "
+    ": [timeFormat(datum.value, '%d %b'), timeFormat(datum.value, '%H:%M')]"))
+
+
+def y_inside(fmt):
+    """Y labels inside the plot: Streamlit sets each stacked chart to the full width, so labels outside
+    it pushed the charts past the right edge (63 px on a laptop)."""
+    return alt.Axis(format=fmt, labelAlign="left", labelBaseline="bottom", labelPadding=-4, ticks=False,
+                    domain=False, title=None)   # format: constant humidity showed "80.000000"
+
+
+def chamber_chart(cdf, wdf, ex_in, hrs):
+    """Temperature above humidity on one time axis, with an overview strip below (owner, 29 Oct 2026):
+    drag a window on the strip to zoom both charts; the y-axes fit what is shown. Double-click resets."""
+    zoom = alt.selection_interval(encodings=["x"], name="zoom")
+    x_dom = alt.Scale(domain=zoom)
+    full = time_axis(cdf["Time"].min(), cdf["Time"].max())
+    rows = []
+    for field, title, colour in (("t", "Temperature [°C]", RED), ("h", "Humidity [%]", GREEN)):
+        sub = cdf.dropna(subset=[field])
+        if not len(sub):
+            continue
+        fmt = ".1f" if field == "t" else ".0f"
+        tip = [alt.Tooltip("Time:T", format="%d %b %H:%M" if hrs < 24 else "%d %b"),
+               alt.Tooltip(f"{field}:Q", title=("average" if hrs else title), format=fmt)]
+        if hrs:
+            tip += [alt.Tooltip(f"{field}_min:Q", title="lowest", format=fmt),
+                    alt.Tooltip(f"{field}_max:Q", title="highest", format=fmt),
+                    alt.Tooltip("n:Q", title="readings")]
+        layers = []
+        if ex_in:                    # left-out periods as grey bands (owner, 28 Oct)
+            layers.append(alt.Chart(pd.DataFrame([{"a": a, "b": b, "Left out": f"{a:%d %b %H:%M} to {b:%d %b %H:%M}"}
+                                                  for a, b in ex_in])).mark_rect(color=MUTED, opacity=0.18, clip=True).encode(
+                x=alt.X("a:T", title=None, axis=DETAIL_AXIS, scale=x_dom), x2="b:T", tooltip=["Left out:N"]))
+        if hrs:                      # lowest–highest band behind the average
+            layers.append(alt.Chart(sub).mark_area(color=colour, opacity=0.15, clip=True).encode(
+                x=alt.X("Time:T", scale=x_dom), y=f"{field}_min:Q", y2=f"{field}_max:Q",
+                detail="seg:N").transform_filter(zoom))
+        layers.append(alt.Chart(sub).mark_line(
+            color=colour, strokeWidth=1.6 if hrs else 1.2, clip=True,
+            point=alt.OverlayMarkDef(color=colour, size=22) if hrs >= 12 else False).encode(
+            x=alt.X("Time:T", title=None, axis=DETAIL_AXIS, scale=x_dom),
+            y=alt.Y(f"{field}:Q", title=None, scale=alt.Scale(zero=False), axis=y_inside(fmt)),
+            detail="seg:N", tooltip=tip).transform_filter(zoom))   # filtered: the y-axis fits the window
+        layers.append(alt.Chart(wdf).mark_rule(color=MUTED, strokeDash=[3, 3], strokeWidth=1, clip=True).encode(
+            x=alt.X("Time:T", scale=x_dom), tooltip=["Weigh-in:N"]).transform_filter(zoom))
+        layers.append(alt.Chart(wdf.dropna(subset=[field])).mark_point(
+            color=INK, filled=True, size=45, clip=True).encode(
+            x=alt.X("Time:T", scale=x_dom), y=alt.Y(f"{field}:Q", axis=y_inside(fmt)),
+            tooltip=["Weigh-in:N", alt.Tooltip(f"{field}:Q", title="day average", format=fmt)]).transform_filter(zoom))
+        rows.append(alt.layer(*layers).properties(
+            height=200, width="container",
+            title=alt.TitleParams(title, anchor="start", fontSize=12, fontWeight="normal", color=MUTED)))
+    strip_field = "t" if cdf["t"].notna().any() else "h"
+    strip = alt.Chart(cdf.dropna(subset=[strip_field])).mark_line(color=MUTED, strokeWidth=1).encode(
+        x=alt.X("Time:T", title=None, axis=full),
+        y=alt.Y(f"{strip_field}:Q", title=None, axis=None, scale=alt.Scale(zero=False)),
+        detail="seg:N").add_params(zoom).properties(height=45, width="container")
+    return alt.concat(*rows, strip, columns=1, spacing=8)
+
+
 def left_out_periods(ch, no_data=()):
     """Periods the sensor was out of the chamber, kept per chamber: applied to every import and hub sync
     (full audit 27 Oct, #3), and can be added without uploading a file (#4)."""
@@ -1208,43 +1270,11 @@ def chamber_section():
                              "t": (match.get(d(r["day"])) or (None, None))[0],
                              "h": (match.get(d(r["day"])) or (None, None))[1]}
                             for r in db.reading_rows(con, pid)])
-        c1, c2 = st.columns(2)
-        for col, field, title, colour in ((c1, "t", "Temperature [°C]", RED), (c2, "h", "Humidity [%]", GREEN)):
-            sub = cdf.dropna(subset=[field])
-            if not len(sub):
-                continue
-            fmt = ".1f" if field == "t" else ".0f"
-            tip = [alt.Tooltip("Time:T", format="%d %b %H:%M" if hrs < 24 else "%d %b"),
-                   alt.Tooltip(f"{field}:Q", title=("average" if hrs else title), format=fmt)]
-            if hrs:
-                tip += [alt.Tooltip(f"{field}_min:Q", title="lowest", format=fmt),
-                        alt.Tooltip(f"{field}_max:Q", title="highest", format=fmt),
-                        alt.Tooltip("n:Q", title="readings")]
-            layers = []
-            if ex_in:                    # left-out periods as grey bands (owner, 28 Oct)
-                layers.append(alt.Chart(pd.DataFrame([{"a": a, "b": b, "Left out": f"{a:%d %b %H:%M} to {b:%d %b %H:%M}"}
-                                                      for a, b in ex_in])).mark_rect(color=MUTED, opacity=0.18).encode(
-                    x=alt.X("a:T", title=None, axis=time_axis(cdf["Time"].min(), cdf["Time"].max())),
-                    x2="b:T", tooltip=["Left out:N"]))
-            if hrs:                      # lowest–highest band behind the average
-                layers.append(alt.Chart(sub).mark_area(color=colour, opacity=0.15).encode(
-                    x="Time:T", y=f"{field}_min:Q", y2=f"{field}_max:Q", detail="seg:N"))
-            layers.append(alt.Chart(sub).mark_line(
-                color=colour, strokeWidth=1.6 if hrs else 1.2,
-                point=alt.OverlayMarkDef(color=colour, size=22) if hrs >= 12 else False).encode(
-                x=alt.X("Time:T", title=None, axis=time_axis(cdf["Time"].min(), cdf["Time"].max())),
-                y=alt.Y(f"{field}:Q", title=title, scale=alt.Scale(zero=False),
-                        axis=alt.Axis(format=fmt)),          # constant humidity showed "80.000000"
-                detail="seg:N", tooltip=tip))
-            layers.append(alt.Chart(wdf).mark_rule(color=MUTED, strokeDash=[3, 3], strokeWidth=1).encode(
-                x="Time:T", tooltip=["Weigh-in:N"]))
-            layers.append(alt.Chart(wdf.dropna(subset=[field])).mark_point(
-                color=INK, filled=True, size=45).encode(
-                x="Time:T", y=alt.Y(f"{field}:Q", axis=alt.Axis(format=fmt)),
-                tooltip=["Weigh-in:N", alt.Tooltip(f"{field}:Q", title="day average", format=fmt)]))
-            col.altair_chart(alt.layer(*layers).properties(height=220), width="stretch")
-        st.caption(("Line: average per " + view + "; shaded: lowest to highest in that period. " if hrs else
-                    "Every reading as recorded. ")
+        st.altair_chart(chamber_chart(cdf, wdf, ex_in, hrs), width="stretch")
+        st.caption("**Zoom**: drag across the strip at the bottom, then drag the window or its edges; "
+                   "double-click (double-tap) the strip to show everything again.  \n"
+                   + ("Line: average per " + view + "; shaded: lowest to highest in that period. " if hrs else
+                      "Every reading as recorded. ")
                    + "Dashed lines: weigh-ins (shown at 12:00). Dots: that day's average, the values in the "
                      "weigh-in table.")
         bits = []

@@ -11,6 +11,7 @@ import pytest
 from pypdf import PdfReader
 from streamlit.testing.v1 import AppTest
 
+from tests.helpers import all_layers
 from bresaola import db, report, sensors, storage, tapo_sync
 from bresaola.demo import seed_demo
 
@@ -144,7 +145,7 @@ def test_overview_shows_left_out_and_missing_and_saves_a_gap(env):
                 specs.append(json.loads(c.proto.spec))
             walk(c)
     walk(at._tree)
-    assert any((l.get("mark") or {}).get("type") == "rect" for sp in specs for l in sp.get("layer", []))
+    assert any((l.get("mark") or {}).get("type") == "rect" for sp in specs for l in all_layers(sp))
 
 
 def test_footnotes_in_caption_size(env):

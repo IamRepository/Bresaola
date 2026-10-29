@@ -9,7 +9,7 @@ import pytest
 from pypdf import PdfReader
 from streamlit.testing.v1 import AppTest
 
-from tests.helpers import pick_project
+from tests.helpers import all_layers, pick_project
 from bresaola import db, report, sensors, storage, tapo_sync
 from bresaola.demo import seed_demo
 from tests.test_sensors import FakeSensor, fake_factory
@@ -195,7 +195,7 @@ def test_chamber_axis_format(env):
                 specs.append(json.loads(c.proto.spec))
             walk(c)
     walk(at._tree)
-    y_h = [layer["encoding"]["y"] for sp in specs for layer in sp.get("layer", [])
+    y_h = [layer["encoding"]["y"] for sp in specs for layer in all_layers(sp)
            if layer.get("encoding", {}).get("y", {}).get("field") == "h"]
     assert y_h and all(y.get("axis", {}).get("format") == ".0f" for y in y_h), y_h
 
@@ -220,10 +220,14 @@ def test_time_axes_use_one_date_format(env):
                 specs.append(json.loads(c.proto.spec))
             walk(c)
     walk(at._tree)
-    xs = [layer["encoding"]["x"] for sp in specs for layer in sp.get("layer", [])
+    xs = [layer["encoding"]["x"] for sp in specs for layer in all_layers(sp)
           if isinstance(layer.get("encoding", {}).get("x"), dict) and "axis" in layer["encoding"]["x"]]
-    assert xs and all(x["axis"]["format"] == "%d %b" and x["axis"].get("values") for x in xs), xs
-    weight = next(x for x in xs if x["field"] == "Date")
+    fixed = [x for x in xs if x["axis"].get("values")]              # weight chart + zoom strip: one format
+    assert fixed and all(x["axis"]["format"] == "%d %b" for x in fixed), fixed
+    weight = next(x for x in fixed if x["field"] == "Date")
     assert [v["date"] for v in weight["axis"]["values"]] == [20, 26, 30, 4, 8]     # the weigh-in days
-    chamber = next(x for x in xs if x["field"] == "Time")
-    assert [v["date"] for v in chamber["axis"]["values"]][:3] == [21, 28, 5]       # every 7 days
+    strip = next(x for x in fixed if x["field"] == "Time")
+    assert [v["date"] for v in strip["axis"]["values"]][:3] == [21, 28, 5]         # every 7 days
+    # v0.4.21: the zoomable charts label midnight with the date and other ticks with the hour
+    zoomed = [x for x in xs if not x["axis"].get("values")]
+    assert zoomed and all("timeFormat(datum.value, '%d %b')" in x["axis"]["labelExpr"] for x in zoomed)
