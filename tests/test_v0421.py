@@ -149,3 +149,12 @@ def test_empty_period_says_so(at):
     at.run()
     assert not at.exception, at.exception
     assert any("No readings in the period shown" in i.value for i in at.info)
+
+
+def test_limit_line_on_the_temperature_axis(at):
+    sp = sensor_spec(at)
+    rules = [l for l in all_layers(sp) if (l.get("mark") or {}).get("type") == "rule"
+             and (l.get("encoding", {}).get("y") or {}).get("field") == "lim"]
+    assert rules and rules[0]["encoding"]["y"]["axis"]["orient"] == "left"      # on the temperature scale
+    texts = [l for l in all_layers(sp) if (l.get("mark") or {}).get("type") == "text"]
+    assert texts and any("Dashed red line: the 4 °C limit" in c.value for c in at.caption)

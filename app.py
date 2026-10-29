@@ -1125,7 +1125,7 @@ def zoom_window(mn: datetime, mx: datetime) -> tuple[datetime, datetime]:
     return st.session_state[k]
 
 
-def chamber_chart(cdf, wdf, ex_in, hrs, lo, hi, gap):
+def chamber_chart(cdf, wdf, ex_in, hrs, lo, hi, gap, limit=None):
     """Temperature (left axis, red) and humidity (right axis, green) in one chart (owner, 29 Oct 2026), for
     the period lo..hi. Only that period's data is drawn, so both y-axes fit it; one averaging period is
     kept beyond each edge so the lines reach the edges."""
@@ -1155,6 +1155,14 @@ def chamber_chart(cdf, wdf, ex_in, hrs, lo, hi, gap):
             color=colour, strokeWidth=1.6 if hrs else 1.2, clip=True,
             point=alt.OverlayMarkDef(color=colour, size=22) if hrs >= 12 else False).encode(
             x=x, y=y, detail="seg:N", tooltip=tip))
+        if field == "t" and limit is not None:     # the safe limit, always in view (owner, 29 Oct 2026)
+            layers.append(alt.Chart(pd.DataFrame([{"lim": limit, "label": f"{limit:g} °C limit"}])).mark_rule(
+                color=colour, strokeDash=[6, 4], strokeWidth=1.2).encode(
+                y=alt.Y("lim:Q", scale=alt.Scale(zero=False), axis=axis, title=title)))
+            layers.append(alt.Chart(pd.DataFrame([{"lim": limit, "label": f"{limit:g} °C limit"}])).mark_text(
+                color=colour, align="left", baseline="bottom", dx=4, dy=-2, fontSize=11).encode(
+                x=alt.value(0), y=alt.Y("lim:Q", scale=alt.Scale(zero=False), axis=axis, title=title),
+                text="label:N"))
         pts = wwin.dropna(subset=[field]) if len(wwin) else wwin
         if len(pts):
             layers.append(alt.Chart(pts).mark_point(color=colour, filled=True, size=50, stroke=INK,
@@ -1310,13 +1318,14 @@ def chamber_section():
         newest = pd.Timestamp(cr[-1]["ts"]).ceil("15min").to_pydatetime()
         chart_slot = st.empty()                  # the chart above, the slider that sets its period below
         lo, hi = zoom_window(first, newest)
-        chart_ = chamber_chart(cdf, wdf, ex_in, hrs, lo, hi, gap)
+        chart_ = chamber_chart(cdf, wdf, ex_in, hrs, lo, hi, gap, safety.TEMP_MAX[KIND or ch["kind"] or "fridge"])
         if chart_ is None:
             chart_slot.info("No readings in the period shown. Widen it with the slider or click **All**.",
                             icon=":material/info:")
         else:
             chart_slot.altair_chart(chart_, width="stretch")
-        st.caption("**Red line: temperature, left axis. Green line: humidity, right axis.**  \n"
+        st.caption("**Red line: temperature, left axis. Green line: humidity, right axis.** Dashed red line: "
+                   f"the {safety.TEMP_MAX[KIND or ch['kind'] or 'fridge']:g} °C limit.  \n"
                    + ("Line: average per " + view + "; shaded: lowest to highest temperature in that period. "
                       if hrs else "Every reading as recorded. ")
                    + "Dashed lines: weigh-ins (shown at 12:00). Dots: that day's averages, the values in the "
