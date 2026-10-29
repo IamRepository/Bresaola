@@ -114,7 +114,7 @@ One-time setup:
     title `NAS`, paste the line, leave **Allow write access unticked** → **Add key**.
     Then delete `deploy_key.pub` from the NAS (the private key stays in /root/.ssh).
 24. Task Scheduler → **Create** → **Scheduled Task** → **User-defined script**: name `bresaola-update`,
-    user **root**, schedule daily at **04:00** (after Hyper Backup at 02:30, before a hub sync at 06:15),
+    user **root**, schedule daily at **04:00** (after Hyper Backup at 02:30, before the hub syncs at 06:15 and 18:15),
     script:
 
         sh /volume1/docker/bresaola/scripts/nas-update.sh

@@ -68,26 +68,35 @@ def records_to_rows(recs) -> list[tuple[datetime, float | None, float | None]]:
     return sensors.merge_same_time(rows)          # the repeated October hour: average, don't overwrite
 
 
-HUB_TYPES = ("Hub", "CameraHub")       # H100 / H110 report "Hub"; H200, H500 and H100 on firmware 1.7.x "CameraHub"
+HUB_TYPES = ("Hub", "CameraHub")       # H100 / H110 report "Hub"; H200 / H500 "CameraHub"
 
 
 async def connect_hub(client, ip: str):
     """The hub's handler. Asks the hub first (discovery) which connection it uses: on the owner's hub
-    (firmware 1.7.7, 29 Oct 2026) port 80 is closed and only the encrypted connection on 443 works,
+    (an H200, firmware 1.7.7, 29 Oct 2026) port 80 is closed and only the encrypted connection on 443 works,
     so h100(ip), which always uses port 80, timed out. Hubs that don't answer discovery: h100(ip)."""
     if hasattr(client, "discover_devices"):
-        errors = []
-        async for r in await client.discover_devices(ip, 5):
-            try:
-                res = r.get()
-            except Exception as e:          # e.g. wrong password: report it, don't try again
-                errors.append(e)
-                continue
-            if type(res).__name__ in HUB_TYPES:
-                return res.handler
-        if errors:
-            raise errors[0]
+        try:
+            async for r in await client.discover_devices(ip, 5):
+                try:
+                    res = r.get()
+                except Exception as e:
+                    if login_error(e):      # wrong password: report it, never a second login (lockout)
+                        raise
+                    continue                # an answer it can't read: try the next one, then h100
+                if type(res).__name__ in HUB_TYPES:
+                    return res.handler
+        except Exception as e:
+            if login_error(e):
+                raise
+            # discovery itself failed (socket busy ...): the older direct connection may still work
     return await client.h100(ip)
+
+
+def login_error(e: Exception) -> bool:
+    """Errors where a second login must not follow (TPAP locks the hub after repeated failures)."""
+    t = f"{type(e).__name__} {e}".upper()
+    return any(k in t for k in ("CREDENTIAL", "AUTH", "PASSWORD", "LOCK", "403"))
 
 
 async def fetch(nicknames: list[str], client_factory=None) -> dict[str, list]:

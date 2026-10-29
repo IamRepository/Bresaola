@@ -116,7 +116,7 @@ def fake_factory(sensor):
     return Client
 
 
-def discovery_factory(sensor, kind="CameraHub", fail=None):
+def discovery_factory(sensor, kind="CameraHub", fail=None, broken=None, h100_ok=False):
     """A hub that answers discovery (firmware 1.7.x) and whose port 80 is closed."""
     class Hub:
         async def t31x(self, nickname=None, device_id=None):
@@ -139,10 +139,14 @@ def discovery_factory(sensor, kind="CameraHub", fail=None):
             assert ip == "192.168.1.50"
 
             async def gen():
+                if broken:
+                    raise broken
                 yield Found()
             return gen()
 
         async def h100(self, ip):
+            if h100_ok:
+                return Hub()
             raise TimeoutError("port 80 closed")
     return Client
 
@@ -348,4 +352,18 @@ def test_sync_through_discovery(con, tapo_env, kind):
 
 def test_discovery_login_error_is_reported_once(con, tapo_env):
     res = tapo_sync.sync(con, discovery_factory(FakeSensor(), fail=RuntimeError("TPAP_CREDENTIALS")))
+    assert "TPAP_CREDENTIALS" in res[0].error
+
+
+@pytest.mark.parametrize("kw", [dict(fail=ValueError("unreadable discovery answer")),
+                                dict(broken=OSError("address in use"))])
+def test_discovery_trouble_falls_back_to_port_80(con, tapo_env, kw):
+    """Diff audit v0.4.19: an older H100 that worked on port 80 must keep working when discovery fails
+    for a reason other than the login."""
+    res = tapo_sync.sync(con, discovery_factory(FakeSensor(), h100_ok=True, **kw))
+    assert res[0].error is None and res[0].stored == 3
+
+
+def test_login_error_from_discovery_never_tries_again(con, tapo_env):
+    res = tapo_sync.sync(con, discovery_factory(FakeSensor(), h100_ok=True, fail=RuntimeError("TPAP_CREDENTIALS")))
     assert "TPAP_CREDENTIALS" in res[0].error

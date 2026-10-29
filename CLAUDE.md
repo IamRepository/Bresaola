@@ -24,7 +24,10 @@ When a trigger applies, say so and recommend a full audit; the owner decides.
 database; 7 findings (#1 stale tab sending old widget values back = most important), all fixed in 5ca7251 with tests.
 Cost: 239k tokens. Before that: 27 Oct 2026 on v0.4.8 (commit b00fd60): 10 findings (2 High), 1-8 + 10 fixed in v0.4.9, 9 accepted
 (DST hour split across two hub syncs). Cost: 254k tokens, about 2 % of the owner's usage. Before that: 26 Oct 2026 on v0.4.2.
-**Last diff audit:** 29 Oct 2026, 6c61d9f..523ae92 (v0.4.18, project picker radio + closed dropdown, gap list folded):
+**Last diff audit:** 29 Oct 2026, 1c40a4a..5bd369c (v0.4.19, hub sync via discovery; owner's hub = H200 fw 1.7.7,
+port 80 closed): no High; 2 suspected Mediums (discovery errors other than login blocked the port-80 fallback;
+iterator exception uncaught) fixed after with tests (102k tokens). Trigger 3 applies (hub sync): owner to decide on
+a full audit. Before that: 29 Oct 2026, 6c61d9f..523ae92 (v0.4.18, project picker radio + closed dropdown, gap list folded):
 no High/Medium (90k tokens); 3 suspected Lows accepted (summary total vs per-gap rounding can differ by 1 h; "6 h"
 literal mirrors sensors.gaps default; test helper fallback). Before that: 28 Oct 2026, d7c9748..5ca7251 (full-audit fixes 1-7): no High/Medium (102k tokens); 3 suspected
 Lows: same-second safety-copy name collision fixed after (pid in name, with test); a copy per failed start and the
