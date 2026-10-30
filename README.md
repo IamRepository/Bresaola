@@ -2,7 +2,7 @@
 
 Records home-cured bresaola batches from spice mix to slicing: calculated amounts, cure time, weigh-ins, chamber temperature/humidity and photos, then a PDF summary when the batch is closed.
 
-**Status: v0.4.17 — journey layout, PDF summary, Tapo sensor import, food-safety checks.**
+**Status: v0.4.22.** Technical documentation: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how it's built), [docs/SETUPS.md](docs/SETUPS.md) (development, test, NAS), [docs/DECISIONS.md](docs/DECISIONS.md) (why), [docs/NAS.md](docs/NAS.md) (NAS runbook).
 
 ## Steps (journey rail at the top; a next-action card says what to do today)
 1. **Day 0: spice and bag** – meat weight, EcoCure on/off, blend → planned grams, actual amounts; measure the piece and seal the bag (cure time shown live). *Done* locks day 0 and starts the cure.
@@ -66,20 +66,21 @@ Thresholds live in `bresaola/safety.py`; the app and the PDF read them from ther
 **Import from the Tapo app (works everywhere, including Streamlit Cloud).**
 In the Tapo app: sensor → History → View All → download icon → choose interval and range → Export.
 Open the e-mail, save the file (CSV, or the Excel version), and upload it in **Dry → Chamber → Import from the Tapo app**. If the sensor was out of the chamber for a while, use **Leave out a period** before importing.
-The app shows how many readings, which period and the ranges before importing. Importing an
-overlapping period again replaces those readings; it never doubles them.
+The app shows how many readings, which period and the ranges before importing. Since v0.4.17 an import only
+adds times that aren't stored yet; readings already there are kept unless you tick *Replace readings that are
+already there*. Importing the same period again never doubles anything.
 
-**Straight from the H100 hub (PC or NAS on your home network only).**
-The hub keeps only the last 24 hours (15-minute averages), so schedule a sync at least once a day.
+**Straight from the hub, H100 or H200 (PC or NAS on your home network only).**
+The hub keeps only the last 24 hours (15-minute averages), so schedule a sync every 6 hours (docs/NAS.md, section 6).
 
 1. `pip install -r requirements-local.txt`
 2. Set these environment variables for the app and for the scheduled task:
    - `TAPO_USERNAME` / `TAPO_PASSWORD`: your Tapo account
-   - `TAPO_HUB_IP`: the H100's address (Tapo app → hub → Device info), best fixed in your router
+   - `TAPO_HUB_IP`: the hub's address (Tapo app → hub → Device info), fixed in your router
    - Each batch's sensor: set its **Tapo sensor name** in the Dry step (v0.4.17). `TAPO_SENSORS`
      (`<chamber>=<sensor nickname>`) is only for older setups.
 3. Test it once: `python -m bresaola.tapo_sync`
-4. Schedule the same command daily (Windows Task Scheduler, or cron on the NAS, e.g. `15 6 * * *`).
+4. Schedule the same command every 6 hours (DSM Task Scheduler on the NAS, see docs/NAS.md).
 
 **Weigh-ins and the chamber.** Each weigh-in shows that day's average chamber temperature
 and humidity (all readings on that date; * = sensor reported for less than half the day; – = none), in the

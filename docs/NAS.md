@@ -72,11 +72,15 @@ needs a scheduled task, twice a day.
     the hub which one it uses. The Third-Party Compatibility switch in the Tapo app may stay on or off.
     If the login fails, don't retry many times: wrong passwords can lock the hub for a while.
 16. DSM → **Control Panel** → **Task Scheduler** → **Create** → **Scheduled Task** → **User-defined script**.
-    User `root`, daily at 06:15 and a second task at 18:15 (one missed run then loses nothing), script:
+    Name `tapo_to_nas`, user `root`. Schedule: daily, first run 00:00, tick **Continue running within the
+    same day**, repeat **every 6 hours**, last run **18:00** (runs at 00, 06, 12 and 18; the hub holds 24 h,
+    so three runs can fail before a reading is lost). Script:
 
         docker exec bresaola python -m bresaola.tapo_sync
 
-    Select the task → **Run** to test; the result is in the task's log.
+    Task Settings: e-mail **only when the script terminates abnormally**. Select the task → **Run** to test;
+    the result is under Action → View result. In the app, each drying batch then shows
+    "Last loaded from the hub" under Sensor readings.
 
 ## 7. Updating to a new version
 17. In the app: **Download backup** first (the new version may upgrade the database when it opens it).
@@ -114,7 +118,7 @@ One-time setup:
     title `NAS`, paste the line, leave **Allow write access unticked** → **Add key**.
     Then delete `deploy_key.pub` from the NAS (the private key stays in /root/.ssh).
 24. Task Scheduler → **Create** → **Scheduled Task** → **User-defined script**: name `bresaola-update`,
-    user **root**, schedule daily at **04:00** (after Hyper Backup at 02:30, before the hub syncs at 06:15 and 18:15),
+    user **root**, schedule daily at **04:00** (after Hyper Backup at 02:30, between the hub syncs at 00:00 and 06:00),
     script:
 
         sh /volume1/docker/bresaola/scripts/nas-update.sh
