@@ -73,7 +73,8 @@ New entries go at the end with the next number.
 ### D-04: Weight loss on the meat from the start of drying
 
 - **Decision.** Loss = (G₀ − G) / (G₀ − T): gross weights minus the tare (wrap + net), measured from the start
-  of drying, not from the raw weight. Confirmed in the food-safety review of 21 Oct 2026.
+  of drying, not from the raw weight. Chosen by the owner after the food-safety review of 21 Oct 2026 and
+  built into v0.4.0 (26 Oct); the tare handling dates from 8 Oct.
 - **Why.** The meat already loses weight in the bag. Measuring from the raw weight would reach the target
   earlier while the meat is wetter. The stricter basis is the safe side.
 - **Alternatives.** Loss from the raw (green) weight, as some recipes quote.
@@ -146,7 +147,8 @@ New entries go at the end with the next number.
 - **Alternatives.** Following `main` (untested changes on real data); manual ZIP uploads (the method until
   v0.4.6, which is how the stale-image problem of D-09 was found).
 - **Consequences.** `stable` only moves after the diff audit and the owner's OK. A rollback restores the
-  program, not the database; migrations only add columns, which older versions ignore.
+  program, not the database. Most migrations only add columns, which older versions ignore, but some convert
+  data (D-11); the copy in `data/pre-update/` is the way back.
 
 ### D-11: One sensor table per batch
 
@@ -171,8 +173,8 @@ New entries go at the end with the next number.
   to every later import and sync. Readings inside a locked drying period are never added or removed. The
   same time from different sources is stored once per source and shown once (export > hub > manual).
 - **Why.** Uploading the same or a longer export again must be harmless, and a finished batch's PDF must stay
-  reproducible. Tapo's cloud history occasionally re-rounds old values by 0.1 °C; ignoring those keeps the
-  record stable.
+  reproducible. Observed on 30 Oct 2026: two exports of the same period a day apart differed in two of
+  about 2300 readings by 0.1 °C or 1 %. Keeping the stored value keeps the record stable.
 - **Consequences.** To correct wrong data, the owner removes it explicitly (*Remove readings*) or ticks
   *Replace*.
 

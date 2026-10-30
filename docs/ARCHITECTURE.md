@@ -128,9 +128,9 @@ can be used and tested without a UI.
 | Module | Lines | Responsibility | Depends on |
 |---|---:|---|---|
 | `app.py` | 1763 | The whole UI: sidebar (projects, backup), step rail, the four step pages, charts, sensor import and sync controls | everything below, Streamlit, Altair, pandas |
-| `bresaola/db.py` | 1098 | Schema, migrations, all reads and writes, locking rules, event log, the v0.4.17 conversion | `calc` |
+| `bresaola/db.py` | 1098 | Schema, migrations, all reads and writes, locking rules, event log, the v0.4.17 conversion | `calc`; `safety` (lazy imports) |
 | `bresaola/calc.py` | 235 | Pure calculations: spice plan, cure time, weight loss, progress, finish estimate | `blends` |
-| `bresaola/safety.py` | 143 | Food-safety limits and the messages built from them | — |
+| `bresaola/safety.py` | 143 | Food-safety limits and the messages built from them | `sensors` (lazy import, for hourly averages) |
 | `bresaola/sensors.py` | 387 | Parsing Tapo export files, importing readings, left-out periods, gaps, averages | `db` |
 | `bresaola/tapo_sync.py` | 247 | Hub sync: discovery, login, fetching, storing, logging; also a command-line entry point | `db`, `sensors`, `tapo` (optional) |
 | `bresaola/report.py` | 449 | The PDF report (ReportLab, bundled DejaVu fonts) | `db`, `calc`, `safety`, `sensors` |
@@ -141,8 +141,10 @@ can be used and tested without a UI.
 | `bresaola/seed_from_xlsx.py` | 81 | One-off import of the original Excel workbook | `db` |
 | `scripts/nas-update.sh` | 136 | Nightly update on the NAS with health check and rollback | git, docker, curl |
 
-Dependency rule: `calc`, `safety`, `blends` and `stages` import nothing from the app or the database, so the
-rules that matter most are pure functions with direct unit tests.
+Dependency rule: `calc`, `blends` and `stages` import nothing from the app or the database, so the
+calculations are pure functions with direct unit tests. `safety` holds pure limits and message builders,
+but two checks average sensor rows through `sensors` (imported inside the function, because `db` imports
+`safety` the same way); its tests pass plain rows and need no database.
 
 ### 3.3 Third-party components
 
@@ -170,12 +172,14 @@ stateDiagram-v2
     Dry --> Finish: lock drying<br/>(target reached, or confirmed below target)
     Finish --> Closed: close project
     Closed --> [*]
-    Day0 --> Day0: unlock (logged)
-    Cure --> Cure: unlock (logged)
+    Cure --> Day0: unlock Day 0 (reason, logged)
+    Dry --> Cure: unlock cure (reason, logged)
+    Finish --> Dry: unlock drying (reason, logged)
 ```
 
-Locks are timestamps on the project row (`spice_locked_at`, `cure_locked_at`, `dry_locked_at`). Every write
-function in `db.py` checks the relevant lock first and raises `Locked`. Ending drying below the weight-loss
+Locks are timestamps on the project row (`spice_locked_at`, `cure_locked_at`, `dry_locked_at`). The functions
+that change a stage's inputs check its lock first (`_require_unlocked`) and raise `Locked`; unlocking goes in
+reverse order (8.1). Ending drying below the weight-loss
 target needs an explicit confirmation, which is logged and printed in the PDF.
 
 ### 4.2 Sensor readings
@@ -304,7 +308,7 @@ is set on every connection, so the `ON DELETE CASCADE` clauses below are enforce
 | `cure_end_actual` | TEXT date | Cure | Out of the bag. Required before the cure can be locked; not after `dry_start`. |
 | `cure_note` | TEXT | Cure | |
 | `cure_locked_at` | TEXT ts | lock Cure | Lock 2. |
-| `cure_fridge_c` | REAL | Cure | Optional temperature of the cure fridge, −5…30 °C (migration). Above 4 °C: warning (7.4). |
+| `cure_fridge_c` | REAL | Cure | Optional temperature of the cure fridge, −5…30 °C (migration). Above 4 °C: warning (7.2, 7.6). |
 | `chamber_id` | INTEGER FK → `chamber` | start drying | The batch's own sensor table (4.2, 5.2). |
 | `dry_start` | TEXT date | start drying | Not before `cure_end_actual`, not in the future. |
 | `dry_start_gross_g` | REAL | start drying | G₀: gross weight (meat + wrap + net) at the start; also stored as the first row in `reading`. |
@@ -327,7 +331,7 @@ is set on every connection, so the `ON DELETE CASCADE` clauses below are enforce
 | `ingredient_line.unit` | TEXT | `pct` (grams, a fraction of W) or `per_kg` (pieces per kg). |
 | `ingredient_line.rate` | REAL | The snapshotted rate r. Editing `blends.py` never changes an existing batch. |
 | `ingredient_line.planned` | REAL | q from 6.1 (grams or pieces). |
-| `ingredient_line.actual`, `note` | REAL, TEXT | As weighed; NULL = not entered. |
+| `ingredient_line.actual`, `note` | REAL, TEXT | As weighed. Starts equal to `planned` when the plan is written; NULL only if cleared. |
 | `reading.day` | TEXT date, unique per batch | One weigh-in per day; saving a second one on the same day replaces it (after a confirmation). |
 | `reading.gross_g` | REAL | G: gross weight on the scale. |
 | `reading.note` | TEXT | Shown as a numbered footnote under the weigh-in table. |
@@ -335,7 +339,7 @@ is set on every connection, so the `ON DELETE CASCADE` clauses below are enforce
 | `photo.stage` | TEXT | `spice`/`cure`/`dry`/`equalise`; NULL = other. Selects the step page. |
 | `photo.reading_id` | INTEGER FK, SET NULL | Legacy link to a weigh-in (the weigh-in photo field was removed in v0.4.16). |
 | `photo.taken_at`, `caption` | TEXT | |
-| `project_event.ts`, `kind`, `detail` | TEXT | Append-only log, kinds: `created`, `renamed`, `start_date_changed`, `blend_changed`, `curing_salt_changed`, `spice_locked`, `spice_unlocked`, `cure_locked`, `cure_unlocked`, `dry_start_changed`, `target_changed`, `dry_locked`, `dry_unlocked`, `equalise_locked`, `equalise_unlocked`, `closed`. |
+| `project_event.ts`, `kind`, `detail` | TEXT | Append-only log, kinds: `created`, `renamed`, `start_date_changed`, `blend_changed`, `curing_salt_changed`, `spice_locked`, `spice_unlocked`, `cure_locked`, `cure_unlocked`, `dry_start_changed`, `target_changed`, `dry_locked`, `dry_unlocked`, `equalise_locked`, `equalise_unlocked`, `photo_deleted`, `closed`. |
 | `chamber.name` | TEXT unique | Internal name, e.g. "Fridge drawer" or "Rome Classic sensor". |
 | `chamber.sensor`, `notes` | TEXT | Informational. |
 | `chamber.kind` | TEXT | `fridge` or `chamber`; selects the limits in 7.2. NULL is set to `fridge` on open. |
@@ -366,7 +370,7 @@ docker/bresaola/data/
 ├── pre-update/bresaola-<stamp>.sqlite       copy before each update (last 5)
 ├── pre-update/compose-<stamp>.yaml
 ├── before-restore/…                         copy before an in-app restore
-└── bresaola-before-v0.4.17-<stamp>.sqlite   copy before the v0.4.17 conversion
+└── bresaola-before-v0.4.17-<YYYYmmdd-HHMMSS>-<pid>.sqlite   copy before the v0.4.17 conversion
 ```
 
 ### 5.4 Concurrency
@@ -396,7 +400,7 @@ Symbols used below:
 | T | tare: wrap + net (g) | `project.tare_g` |
 | L* | target weight loss (%) | `project.target_loss_pct` |
 
-`⌈x⌉` is the ceiling. Before every ceiling, x is rounded to 9 decimals (`_ceil`), so float noise such as
+`⌈x⌉` is the ceiling. In the spice plan and the cure time, x is first rounded to 9 decimals (`_ceil`), so float noise such as
 2.0000000001 can't round up to 3.
 
 ### 6.1 Spice plan (`spice_plan`)
@@ -458,12 +462,13 @@ Example: G₀ = 2100 g, T = 0, L* = 35 % → G* = 1365 g.
 
 ### 6.4 Estimated finish (`recent_eta`, `drying_eta`)
 
-A least-squares line through the weigh-ins (the start weight is the first one), with x = days since the
-first weigh-in and y = G:
+A least-squares line through a set of weigh-ins (the start weight counts as one), with x = days since the
+first weigh-in **of that set** (d₀) and y = G:
 
 $$b = \frac{\sum (x_i - \bar x)(y_i - \bar y)}{\sum (x_i - \bar x)^2},\qquad a = \bar y - b\,\bar x,
 \qquad x^* = \frac{G^* - a}{b},\qquad \text{date} = d_0 + \lceil x^* \rceil$$
 
+- The date rounds x* up with a plain ceiling (no 9-decimal rounding here).
 - No estimate if b ≥ 0 (not losing weight) or fewer than two weigh-ins on different days.
 - **Shown as "Estimated finish": the recent pace.** Only the weigh-ins within 21 days of the latest one
   (`RECENT_DAYS`), and at least the last 3 (`RECENT_MIN_POINTS`).
@@ -504,7 +509,9 @@ The weigh-in table pairs each weigh-in with the conditions behind it:
 - On the chart, a line is broken where the time between two points exceeds 1.5 × the block length (1 h in
   the 15-minute view), so it never bridges missing data.
 - A *gap* in the overview is any stretch of at least 6 hours between two readings within the drying
-  period, minus left-out periods. Before the first and after the last reading is not a gap.
+  period (`sensors.gaps`). The overview hides a gap only when a left-out period covers it, to within one
+  hour at both ends; a gap that overlaps a left-out period only partly is shown in full. Before the first
+  and after the last reading is not a gap.
 
 ---
 
@@ -540,7 +547,7 @@ protected. The batch is protected by a combination of barriers, and the app chec
 |---|---|---|---|---|
 | `TEMP_MAX["fridge"]` | 4.0 °C | A drying fridge should stay below this; the cold is part of the protection | Hourly averages of the drying readings; day/period averages in the table; chart line | Warning (app + PDF), ⚠ in the tables, dashed limit line |
 | `TEMP_MAX["chamber"]` | 15.0 °C | Curing chamber: above this the spoilage risk rises | as above | Warning, ⚠ |
-| `DRY_TEMP_SLOW` | 10.0 °C | Curing chamber only: average below this is safe but slow | Average over the drying period | Note (info) |
+| `DRY_TEMP_SLOW` | 10.0 °C | Curing chamber only: average below this is safe but slow | Mean of the hourly averages over the drying period | Note (info) |
 | `BOTULISM_MIN_C` | 3.0 °C | Below about this, the bacteria behind botulism can't grow | — (used in the explanation for batches without curing salt) | Text only |
 | `RH_MAX` | 90 % | Above: mould risk | Hourly averages; table averages | Warning, ⚠ |
 | `RH_MIN` | 65 % | Below: case hardening | as above | Warning, ⚠ |
@@ -621,6 +628,8 @@ The message depends on where the batch dries and on what the sensor recorded dur
 | `lock_dry` | cure not locked; end before drying start or last weigh-in; future; below target without confirmation | `dry_locked` |
 | `unlock_spice` | cure locked (unlock in reverse order) | `spice_unlocked` + reason |
 | `unlock_cure` | drying locked | `cure_unlocked` + reason |
+| `unlock_dry` | project closed; clears `dry_end` and `dry_kind` | `dry_unlocked` + reason |
+| `lock_spice` | nothing (the UI offers it only on an open batch) | `spice_locked` |
 | `close_project` | any step not locked (`close_problems`) | `closed` |
 
 Notes and photos deliberately skip the step locks: they stay editable until the batch is closed. In a closed
@@ -683,7 +692,8 @@ DSM e-mails the output; with "only when the script terminates abnormally" only f
 - **Test suite:** about 300 pytest tests in 27 files (`pytest -q`, about 2 minutes).
   - Unit tests for the pure modules (`test_calc`, `test_safety`, `test_stages`).
   - Database rules (`test_db`).
-  - Import and sync with a fake hub, including discovery and login errors (`test_sensors`, `test_v0420`).
+  - Import and sync with a fake hub, including discovery and login errors (`test_sensors`); the sync log and
+    the stale-reading warning (`test_v0420`).
   - PDF content via pypdf (`test_report`).
   - The UI with Streamlit's `AppTest` (`test_app`, `test_v04xx`).
   - The NAS update script with fake `docker` and `curl` (`test_nas_update`), and the deployment invariants
@@ -707,6 +717,7 @@ DSM e-mails the output; with "only when the script terminates abnormally" only f
 | `tapo` library pinned `<0.13` | Misses fixes for new firmware | Pin raised deliberately with a test run on the real hub | — |
 | Streamlit pinned `<1.67` | Security and browser fixes missed | Upgrade is a full-audit trigger | Plan an upgrade with a full audit |
 | `app.py` ~1800 lines | Harder to change safely | Logic kept in `bresaola/`; UI tests | Split by step page |
+| `lock_spice`, `lock_cure` don't check for a closed batch in the database layer | A future UI path could re-lock a closed batch and log it | The UI never offers it; closing requires all locks anyway | Add `_require_open` with a test |
 | One storage location (the NAS) | Loss of the record | Hyper Backup nightly, copy before every update, in-app backup zip; a Hyper Backup restore was tested in Oct 2026 | Off-site copy of the backup |
 | No authentication | Anyone on the home network can edit | Home network + VPN only | Streamlit auth or a reverse proxy, if access widens |
 
@@ -725,7 +736,7 @@ DSM e-mails the output; with "only when the script terminates abnormally" only f
 | Target loss | Weight loss of the meat (from the start of drying) at which drying is done. |
 | Chamber | A batch's sensor table and its drying-place type (fridge or curing chamber). Historical name: once a physical fridge shared by batches. |
 | Left-out period | A time the sensor was out of the fridge; its readings are never stored. |
-| Gap | ≥ 6 hours without readings, not left out. |
+| Gap | ≥ 6 hours between two readings, not covered by a left-out period. |
 | Hub sync | Reading the last 24 h from the Tapo hub over the LAN. |
 | `main`, `stable` | Git branches: development and tested; the NAS follows `stable`. |
 | Diff audit, full audit | Independent review of a change set, or of the whole app in a browser (`CLAUDE.md`). |

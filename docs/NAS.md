@@ -46,7 +46,7 @@ nothing, and the two do not share data.
 
 ## 6. Tapo hub sync (optional)
 The hub (H100 or H200) keeps only the last 24 hours (and nothing from before its last restart), so this
-needs a scheduled task, twice a day.
+needs a scheduled task every 6 hours (step 16).
 12. Give the hub a fixed address in your router (DHCP reservation): after a restart it may get a new one.
 13. Create a text file `docker/bresaola/.env`, next to `compose.yaml` (File Station → Create → Create file,
     name exactly `.env`, no `.txt`; Settings → **Show hidden files** to see it), with:
@@ -100,8 +100,9 @@ there is something new: copies the database (and `compose.yaml`) to `data/pre-up
 the new files, rebuilds and restarts. It then checks that the container reports the new version and opens the
 database; if not, it goes back to the previous version (whose image is kept) and won't retry that version
 until `stable` changes (it fails, and e-mails you, every night until then). Log: `update.log`.
-Note: going back restores the program, not the database. Database upgrades only ever add columns, which the
-previous version ignores; the copy in `data/pre-update/` is there if you want the exact old state.
+Note: going back restores the program, not the database. Most database upgrades only add columns, which the
+previous version ignores; some versions also convert data (v0.4.17 gave each batch its own sensor table). The
+copy in `data/pre-update/` is the way back to the exact old state.
 
 One-time setup:
 21. Install the v0.4.7 ZIP the usual way (section 7), so `scripts/nas-update.sh` is on the NAS.
