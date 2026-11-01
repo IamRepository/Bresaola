@@ -10,6 +10,8 @@ Run:  streamlit run app.py
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
+import shutil
 import html
 import os
 import re
@@ -122,11 +124,21 @@ section[data-testid="stSidebar"] .st-key-testmode [data-testid="stAlert"] p {{ f
 # helpers
 # --------------------------------------------------------------------------- #
 
+DEMO_DB = Path(__file__).parent / "bresaola" / "demo_data.sqlite"
+
+
 def get_con():
     fresh = not storage.db_path().exists()
     con = db.connect(storage.db_path())
     if fresh and storage.is_test_mode():   # demo only in a brand-new test database
-        seed_demo_readings(con, seed_demo(con))
+        # a snapshot of the owner's NAS data, without photos (1 Nov 2026); BRESAOLA_DEMO=synthetic (the tests)
+        # keeps the small made-up demo batch
+        if DEMO_DB.exists() and os.environ.get("BRESAOLA_DEMO") != "synthetic":
+            con.close()
+            shutil.copyfile(DEMO_DB, storage.db_path())
+            con = db.connect(storage.db_path())
+        else:
+            seed_demo_readings(con, seed_demo(con))
     return con
 
 

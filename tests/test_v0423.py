@@ -65,3 +65,26 @@ def test_photo_menu_has_date_field(env):
     at.run()
     assert not at.exception, at.exception
     assert any(d.label == "Date taken" for d in at.date_input)
+
+
+def test_test_mode_starts_from_the_snapshot(tmp_path, monkeypatch):
+    """Owner, 1 Nov 2026: the test app starts from a copy of the NAS data, without photos."""
+    monkeypatch.setenv("BRESAOLA_DATA", str(tmp_path))
+    monkeypatch.delenv("BRESAOLA_MODE", raising=False)
+    monkeypatch.delenv("BRESAOLA_DEMO", raising=False)
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    assert not at.exception, at.exception
+    con = db.connect(storage.db_path())
+    names = {r["name"] for r in db.projects(con)}
+    assert {"Palermo", "Rome"} <= names
+    assert con.execute("SELECT COUNT(*) FROM photo").fetchone()[0] == 0
+    assert con.execute("SELECT COUNT(*) FROM chamber_reading").fetchone()[0] > 1000
+
+
+def test_snapshot_has_no_photos_or_credentials():
+    import sqlite3
+    c = sqlite3.connect(ROOT / "bresaola" / "demo_data.sqlite")
+    assert c.execute("SELECT COUNT(*) FROM photo").fetchone()[0] == 0
+    dump = "\n".join(c.iterdump()).lower()
+    assert "password" not in dump and "tapo_password" not in dump

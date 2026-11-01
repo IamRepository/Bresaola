@@ -673,8 +673,9 @@ escapes HTML, the PDF escapes for ReportLab. A note like `**bold** :red[x]` appe
 ### 8.6 Test and persistent mode
 
 `BRESAOLA_MODE=persistent` on the NAS (set in the Dockerfile and `compose.yaml`). Anything else is test mode:
-a banner says data isn't kept, and a fresh database gets the demo batch with made-up sensor readings
-(`demo.py`). Streamlit Cloud runs in test mode and loses its data on reboot.
+a banner says data isn't kept, and a fresh database starts as a copy of `bresaola/demo_data.sqlite`, a snapshot
+of the owner's data without photos (1 Nov 2026). The tests set `BRESAOLA_DEMO=synthetic` (`tests/conftest.py`)
+and get the small made-up demo batch from `demo.py` instead. Streamlit Cloud runs in test mode and loses its data on reboot.
 
 ### 8.7 What the scheduled tasks report
 

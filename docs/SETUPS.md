@@ -124,7 +124,7 @@ passwords.
 | Branch | `main` (every push redeploys) |
 | Python packages | `requirements.txt` only (no `tapo`) |
 | Mode | test (`BRESAOLA_MODE` not set) |
-| Data | demo batch with 18 days of made-up sensor readings, a door-open hour and a left-out period; lost on restart or sleep |
+| Data | a snapshot of the owner's NAS data from 1 Nov 2026 without photos (`bresaola/demo_data.sqlite`: Palermo, Rome, Taormina, 4084 sensor readings); lost on restart or sleep. Refreshed from a new backup on request. Without the file (or with `BRESAOLA_DEMO=synthetic`, as in the tests): the small made-up demo batch |
 | Secrets | none needed |
 
 Use it to try a change on a phone before it reaches the NAS. It can't reach the hub, so the hub sync section
