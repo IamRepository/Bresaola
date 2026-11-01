@@ -198,6 +198,8 @@ def _chart(rs, start_day: date, target_g: float, width=BODY_W, height=62 * mm):
     lp.lines[0].strokeWidth = 1.4
     lp.lines[0].symbol = makeMarker("FilledCircle", size=3.2, fillColor=RED, strokeColor=RED)
     lp.xValueAxis.valueMin, lp.xValueAxis.valueMax = 0, xmax
+    step_ = max(1, -(-xmax // 6))                       # whole days only: short batches got repeated dates
+    lp.xValueAxis.valueSteps = list(range(0, int(xmax) + 1, int(step_)))
     lp.xValueAxis.labels.fontName = lp.yValueAxis.labels.fontName = "DejaVu"
     lp.xValueAxis.labels.fontSize = lp.yValueAxis.labels.fontSize = 7
     lp.xValueAxis.labelTextFormat = lambda v: f"{start_day + timedelta(days=round(v)):%d %b}"
@@ -395,7 +397,8 @@ def build_pdf(con, pid: int) -> bytes:
             story.append(Spacer(1, 4))
             story.append(_alert(safety.below_target_message(*short)))
     else:
-        story.append(Paragraph("Drying has not started yet, so there is no result.", S["body"]))
+        story.append(Paragraph("Drying has not started yet, so there is no result." if not p["dry_start"] else
+                               "Drying has started, but there are no weigh-ins yet, so there is no result.", S["body"]))
 
     # --- timeline ------------------------------------------------------------------------ #
     story += _h2(2, "Timeline")
@@ -458,6 +461,8 @@ def build_pdf(con, pid: int) -> bytes:
     full_texts()
 
     # --- cure ---------------------------------------------------------------------------- #
+    if not p["thickness_cm"] and (p["cure_note"] or "").strip():     # old batches: notes, no measurements
+        story += _h2(4, "Cure")
     if p["thickness_cm"]:
         story += _h2(4, "Cure")
         est = " (estimate)" if p["thickness_estimated"] else ""
@@ -482,8 +487,7 @@ def build_pdf(con, pid: int) -> bytes:
         if w := safety.cure_fridge_warning(p["cure_fridge_c"]):
             story.append(_alert(w))
 
-    if p["thickness_cm"]:
-        story += _notes("Notes: Cure", p["cure_note"])
+    story += _notes("Notes: Cure", p["cure_note"])        # always, also without measurements (diff audit)
     photos_for({"cure"}, "Photos: Cure")
     full_texts()
 
@@ -564,7 +568,10 @@ def build_pdf(con, pid: int) -> bytes:
             story.append(Spacer(1, 3))
             story.append(_alert(w))
 
-    if p["dry_start"] and rs:
+    if p["dry_start"] and not rs:                         # started, no weigh-in yet: the notes still belong here
+        story += [PageBreak()] + _h2(5, "Drying")
+        story.append(Paragraph(_text(f"Drying started {_fd(p['dry_start'])}; no weigh-ins yet."), S["body"]))
+    if p["dry_start"]:
         story += _notes("Notes: Drying", p["dry_note"])
     photos_for({"dry"}, "Photos: Drying")
     full_texts()

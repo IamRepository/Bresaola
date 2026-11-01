@@ -127,3 +127,30 @@ def test_professional_layout(con):
     assert t.index("4 Cure") < t.index("Notes: Cure") < t.index("5 Drying")
     assert f"page 1 of {len(pages)}" in pages[0].extract_text()
     assert "Batch report · Palermo Spicy" in pages[1].extract_text()
+
+
+def test_cure_note_without_measurements_is_kept(con):
+    """Diff audit v0.4.25: cure notes vanished when the batch had no cure thickness."""
+    with con:
+        con.execute("UPDATE project SET thickness_cm=NULL, cure_note='CURENOTE_X' WHERE id=1")
+    t = text(report.build_pdf(con, 1))
+    assert "4 Cure" in t and "CURENOTE_X" in t
+
+
+def test_dry_note_without_weigh_ins_is_kept(con):
+    """Diff audit v0.4.25: drying notes vanished when drying had started without weigh-ins."""
+    with con:
+        con.execute("DELETE FROM reading WHERE project_id=1")
+        con.execute("UPDATE project SET dry_note='DRYNOTE_X' WHERE id=1")
+    t = text(report.build_pdf(con, 1))
+    assert "DRYNOTE_X" in t and "no weigh-ins yet" in t and "Drying has not started yet" not in t
+
+
+def test_weight_chart_ticks_whole_days():
+    """Diff audit v0.4.25: short batches showed the same date on several ticks."""
+    from datetime import date
+    for n in (1, 2, 3, 40):
+        from datetime import timedelta
+        dr = report._chart([(date(2026, 9, 1), 2000), (date(2026, 9, 1) + timedelta(days=n), 1990)], date(2026, 9, 1), 1300)
+        lp = dr.contents[0]
+        assert all(float(v).is_integer() for v in lp.xValueAxis.valueSteps)
