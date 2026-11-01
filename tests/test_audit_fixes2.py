@@ -134,7 +134,7 @@ def test_start_date_change_moves_unlocked_bag_date(tmp_path, monkeypatch):
     db.set_start_date(con, pid, date(2026, 10, 3))
     p = db.project(con, pid)
     assert (p["start_date"], p["cure_start"]) == ("2026-10-03", "2026-10-03")
-    assert db.display_name(p) == "26/10/03 S"
+    assert db.display_name(p) == "S (03-Oct-26)"
     assert db.events(con, pid)[-1]["kind"] == "start_date_changed"
 
 
@@ -160,4 +160,4 @@ def test_start_date_changed_from_sidebar(env):
     next(b for b in at.button if b.label == "Change start date").click()
     at.run()
     assert not at.exception, at.exception
-    assert at.header[0].value == "26/08/14 Palermo Spicy"
+    assert at.header[0].value == "Palermo Spicy (14-Aug-26)"

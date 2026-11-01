@@ -91,7 +91,7 @@ def test_project_name_with_markdown_characters(env):
     with env:
         db.rename_project(env, 1, "My_test_batch *2*")
     at = start()
-    assert at.header[0].value.endswith(r"My\_test\_batch \*2\*")
+    assert at.header[0].value.startswith(r"My\_test\_batch \*2\* (")
     label = next(t.label for t in at.sidebar.text_input if t.key == "del1")
     assert r"**My\_test\_batch \*2\***" in label
 

@@ -91,7 +91,7 @@ def unlock(at, step):
 
 def test_demo_opens_on_current_step_dry(app):
     assert any("Test mode" in w.value for w in app.warning)
-    assert app.header[0].value == "26/08/15 Palermo Spicy"
+    assert app.header[0].value == "Palermo Spicy (15-Aug-26)"
     m = metrics(app)
     assert m["Target weight"] == "1365 g" and m["Latest weight"] == "1963 g"
     assert any("Test mode" in w.value for w in app.sidebar.warning)     # banner lives in the sidebar
@@ -129,7 +129,7 @@ def test_rail_status_lines(tmp_path, monkeypatch):
 
 def test_new_project_starts_on_day0_and_done_jumps_to_cure(app, tmp_path):
     new_project(app, "Rome", 1838)
-    assert app.header[0].value.endswith(" Rome")
+    assert app.header[0].value.startswith("Rome (")
     assert "Day 0:" in html(app)
     assert metrics(app)["Total planned [g]"] == "85.5"          # Classic Italian, 1838 g
     next(n for n in app.number_input if n.label == "Thickness [cm]").set_value(10.0)
@@ -149,7 +149,7 @@ def test_new_project_with_own_start_date(app):
     next(r for r in app.sidebar.radio if r.label == "Curing salt").set_value("Without curing salt")
     btn(app.sidebar, "Create project").click()
     app.run(); ok(app)
-    assert app.header[0].value == "26/09/01 Back-dated"
+    assert app.header[0].value == "Back-dated (01-Sep-26)"
     assert next(d for d in app.date_input if d.label == "Into the bag").value == date(2026, 9, 1)
 
 
@@ -281,7 +281,7 @@ def test_rename_from_sidebar_menu(app):
     app.run()
     btn(app, "Rename").click()
     app.run(); ok(app)
-    assert app.header[0].value == "26/08/15 Palermo Hot"
+    assert app.header[0].value == "Palermo Hot (15-Aug-26)"
 
 
 def test_rename_to_existing_name_shows_message(app):

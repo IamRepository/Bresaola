@@ -146,13 +146,13 @@ def pick(a, pid):
 # 1: switching projects takes effect every time
 def test_project_switch_works_every_time(at):
     new_project(at, "Second")
-    assert at.header[0].value.endswith("Second")
+    assert at.header[0].value.startswith("Second (")
     pick(at, 1)
-    assert at.header[0].value.endswith("Palermo Spicy")
+    assert at.header[0].value.startswith("Palermo Spicy (")
     pick(at, 2)
-    assert at.header[0].value.endswith("Second")
+    assert at.header[0].value.startswith("Second (")
     pick(at, 1)
-    assert at.header[0].value.endswith("Palermo Spicy")
+    assert at.header[0].value.startswith("Palermo Spicy (")
 
 
 # 2: unsaved table edits do not move to another blend's rows

@@ -142,7 +142,7 @@ def test_old_database_gets_new_columns(tmp_path):
     con = db.connect(path)
     p = db.project(con, 1)
     assert p["start_date"] == "2026-09-01" and p["spice_note"] is None
-    assert db.display_name(p) == "26/09/01 Old"
+    assert db.display_name(p) == "Old (01-Sep-26)"
     assert p["cure_locked_at"] == "2026-09-20T00:00:00"   # finished cure counts as locked
     assert p["dry_locked_at"] is None
 
@@ -179,7 +179,7 @@ def test_rename(con):
     pid = db.create_project(con, "Palermo Spicy 2026 (demo)", "Spicy Calabrian", False, 2088,
                             start_date=date(2026, 8, 15))
     db.rename_project(con, pid, "Palermo Spicy")
-    assert db.display_name(db.project(con, pid)) == "26/08/15 Palermo Spicy"
+    assert db.display_name(db.project(con, pid)) == "Palermo Spicy (15-Aug-26)"
     with pytest.raises(ValueError):
         db.rename_project(con, pid, "  ")
 

@@ -558,9 +558,9 @@ def set_start_date(con, pid: int, day) -> None:
 
 
 def display_name(p) -> str:
-    """'26/08/15 Palermo Spicy' – start date as YY/MM/DD, then the name."""
+    """'Palermo Spicy (15-Aug-26)': the name, then the start date (owner, 1 Nov 2026; was '26/08/15 Palermo Spicy')."""
     d = p["start_date"] or p["created_at"][:10]
-    return f"{date.fromisoformat(d):%y/%m/%d} {p['name']}"
+    return f"{p['name']} ({date.fromisoformat(d):%d-%b-%y})"
 
 
 def lock_spice(con, pid: int) -> None:
@@ -943,6 +943,20 @@ def set_photo_caption(con, photo_id: int, caption: str | None) -> None:
     ph = _photo(con, photo_id)
     _require_open(con, ph["project_id"])
     con.execute("UPDATE photo SET caption=? WHERE id=?", ((caption or "").strip() or None, photo_id))
+
+
+def set_photo_date(con, photo_id: int, day) -> None:
+    """Correct the date a photo was taken (owner, 1 Nov 2026): open projects only, not in the future,
+    not before the batch's start date."""
+    ph = _photo(con, photo_id)
+    _require_open(con, ph["project_id"])
+    day = date.fromisoformat(_iso(day))
+    if day > today():
+        raise ValueError("The photo date is in the future")
+    start = project(con, ph["project_id"])["start_date"]
+    if start and day.isoformat() < start:
+        raise ValueError(f"The photo date is before the start date ({date.fromisoformat(start):%d %b %Y})")
+    con.execute("UPDATE photo SET taken_at=? WHERE id=?", (day.isoformat(), photo_id))
 
 
 def delete_photo(con, photo_id: int) -> str:

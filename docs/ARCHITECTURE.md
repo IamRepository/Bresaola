@@ -1,6 +1,6 @@
 # Bresaola Tracker: architecture
 
-Status: **draft 2, 30 Oct 2026** (v0.4.22). Every statement, constant and formula is checked against the code
+Status: **draft 2, 30 Oct 2026**, updated for v0.4.23. Every statement, constant and formula is checked against the code
 of that version. Where the code and this document disagree, the code is right and this document has a bug:
 fix it in the same change set (`CLAUDE.md`).
 
@@ -133,7 +133,7 @@ can be used and tested without a UI.
 | `bresaola/safety.py` | 143 | Food-safety limits and the messages built from them | `sensors` (lazy import, for hourly averages) |
 | `bresaola/sensors.py` | 387 | Parsing Tapo export files, importing readings, left-out periods, gaps, averages | `db` |
 | `bresaola/tapo_sync.py` | 247 | Hub sync: discovery, login, fetching, storing, logging; also a command-line entry point | `db`, `sensors`, `tapo` (optional) |
-| `bresaola/report.py` | 449 | The PDF report (ReportLab, bundled DejaVu fonts) | `db`, `calc`, `safety`, `sensors` |
+| `bresaola/report.py` | ~560 | The PDF report (ReportLab, bundled DejaVu fonts): sections, weight chart, temperature/humidity chart, photo grid and full-width photo appendix; the original photo files embedded as PDF attachments (pypdf) | `db`, `calc`, `safety`, `sensors`, `storage` |
 | `bresaola/storage.py` | 226 | Where data lives, test/persistent mode, photo files, backup and restore zip | — |
 | `bresaola/blends.py` | 43 | The blend table and the salt/EcoCure rates | — |
 | `bresaola/stages.py` | 19 | Stage states for the step rail | — |
@@ -288,7 +288,7 @@ is set on every connection, so the `ON DELETE CASCADE` clauses below are enforce
 | Column | Type | Set by | Meaning |
 |---|---|---|---|
 | `id` | INTEGER PK | create | Never reused: the highest id ever issued is kept in `meta.last_project_id`, so a deleted batch's photo folder can't be inherited. |
-| `name` | TEXT unique | create, rename | Name without the date; the UI shows `display_name()`: `YY/MM/DD <name>` from `start_date`. |
+| `name` | TEXT unique | create, rename | Name without the date; the UI and the PDF show `display_name()`: `<name> (DD-Mon-YY)` from `start_date`, e.g. "Palermo Spicy (15-Aug-26)". |
 | `status` | TEXT | close | `active` or `closed` (CHECK). Closed = read-only everywhere. |
 | `created_at` | TEXT ts | create | When the row was created. |
 | `start_date` | TEXT date | create, project menu | Day 0: meat trimmed, spiced and bagged. Can't be in the future. |
@@ -338,7 +338,7 @@ is set on every connection, so the `ON DELETE CASCADE` clauses below are enforce
 | `photo.path` | TEXT | Relative to the photo folder; validated against a pattern on restore, so a backup can't point outside it. |
 | `photo.stage` | TEXT | `spice`/`cure`/`dry`/`equalise`; NULL = other. Selects the step page. |
 | `photo.reading_id` | INTEGER FK, SET NULL | Legacy link to a weigh-in (the weigh-in photo field was removed in v0.4.16). |
-| `photo.taken_at`, `caption` | TEXT | |
+| `photo.taken_at`, `caption` | TEXT | Both editable in the photo menu while the batch is open; the date not in the future or before `start_date`. |
 | `project_event.ts`, `kind`, `detail` | TEXT | Append-only log, kinds: `created`, `renamed`, `start_date_changed`, `blend_changed`, `curing_salt_changed`, `spice_locked`, `spice_unlocked`, `cure_locked`, `cure_unlocked`, `dry_start_changed`, `target_changed`, `dry_locked`, `dry_unlocked`, `equalise_locked`, `equalise_unlocked`, `photo_deleted`, `closed`. |
 | `chamber.name` | TEXT unique | Internal name, e.g. "Fridge drawer" or "Rome Classic sensor". |
 | `chamber.sensor`, `notes` | TEXT | Informational. |

@@ -37,7 +37,7 @@ def jpeg():
 
 def test_demo_summary_contents(con):
     t = text(report.build_pdf(con, 1))
-    for s in ("26/08/15 Palermo Spicy", "summary so far", "1963 g", "137 g", "36 days",
+    for s in ("Palermo Spicy (15-Aug-26)", "summary so far", "1963 g", "137 g", "36 days",
               "Fennel seed, powder", "Used less fennel than planned", "Timeline", "18 Sep 2026",
               "1365 g", "8 Oct 2026", "Equilibrium dry cure", "Dried in a fridge"):
         assert s in t, s
@@ -59,7 +59,29 @@ def test_photos_included_and_missing_file_tolerated(con):
     pdf = report.build_pdf(con, 1)
     t = text(pdf)
     assert "Photos" in t and "rub" in t and "missing or unreadable" in t
-    assert sum(len(p.images) for p in PdfReader(io.BytesIO(pdf)).pages) == 1
+    r = PdfReader(io.BytesIO(pdf))
+    assert sum(len(p.images) for p in r.pages) == 2            # the grid, and the appendix at full width
+    assert "Appendix: photos" in t
+    names = list(r.attachments)                                 # original file attached (owner, 31 Oct 2026)
+    assert len(names) == 1 and names[0].startswith("2026-08-15_Day0_")       # the missing file is skipped
+    assert r.attachments[names[0]][0] == storage.photo_file(db.photos(con, 1, "spice")[0]["path"]).read_bytes()
+
+
+def test_climate_chart_in_pdf(con):
+    """Owner, 31 Oct 2026: the PDF lacked the temperature and humidity chart."""
+    from datetime import datetime, timedelta
+    from bresaola import sensors
+    with con:
+        sensors.import_readings(con, 1, [(datetime(2026, 9, 21) + timedelta(minutes=15 * i), 2.0 + (i % 40) / 20,
+                                          80.0) for i in range(4 * 24 * 10)], "tapo_export")
+        db.add_exclusion(con, 1, datetime(2026, 9, 24), datetime(2026, 9, 25))
+    t = text(report.build_pdf(con, 1))
+    assert "Temperature and humidity during drying" in t
+    assert "4 °C limit" in t and "Temperature [°C], left, red" in t and "Humidity [%], right, green" in t
+
+
+def test_no_climate_chart_without_readings(con):
+    assert "Temperature and humidity during drying" not in text(report.build_pdf(con, 1))
 
 
 def test_new_project_without_any_data(con):

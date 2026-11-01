@@ -7,12 +7,12 @@ symbols print correctly on every machine.
 from __future__ import annotations
 
 import io
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from xml.sax.saxutils import escape
 
 from reportlab.graphics.charts.lineplots import LinePlot
-from reportlab.graphics.shapes import Drawing, Line, String
+from reportlab.graphics.shapes import Drawing, Line, PolyLine, Rect, String
 from reportlab.graphics.widgets.markers import makeMarker
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
@@ -21,7 +21,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import (Image, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table,
+from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table,
                                 TableStyle)
 
 from . import __version__, calc, db, safety, sensors, storage
@@ -36,6 +36,7 @@ INK = colors.HexColor("#2e2a28")
 MUTED = colors.HexColor("#7d7672")
 LINE = colors.HexColor("#e3dedb")
 SOFT = colors.HexColor("#f6f3f1")
+GREEN = colors.HexColor("#3d5a45")
 
 PAGE_W, PAGE_H = A4
 MARGIN = 16 * mm
@@ -50,6 +51,7 @@ S = {
     "small": ParagraphStyle("small", fontName="DejaVu", fontSize=7.5, leading=10, textColor=MUTED),
     "lab": ParagraphStyle("lab", fontName="DejaVu", fontSize=7.5, leading=9.5, textColor=MUTED),
     "val": ParagraphStyle("val", fontName="DejaVu-Bold", fontSize=13, leading=16, textColor=INK),
+    "h3": ParagraphStyle("h3", fontName="DejaVu-Bold", fontSize=9.5, leading=12, textColor=INK, keepWithNext=1),
     "cell": ParagraphStyle("cell", fontName="DejaVu", fontSize=8, leading=10, textColor=INK, alignment=TA_LEFT),
 }
 
@@ -178,6 +180,76 @@ def _chart(rs, start_day: date, target_g: float, width=BODY_W, height=62 * mm):
     dr.add(Line(lp.x, ty, lp.x + lp.width, ty, strokeColor=INK, strokeWidth=0.8, strokeDashArray=[4, 3]))
     dr.add(String(lp.x + lp.width - 2, ty + 3, f"target {target_g:.0f} g", fontName="DejaVu",
                   fontSize=7, fillColor=INK, textAnchor="end"))
+    return dr
+
+
+def _climate_chart(crs, excl, weigh_days, limit_c, width=BODY_W, height=70 * mm):
+    """Temperature (left axis, red) and humidity (right axis, green) over the drying period, hourly
+    averages, like the app's chart (owner, 31 Oct 2026): dashed limit line, grey left-out periods,
+    dotted weigh-ins at 12:00. A line is broken where readings are missing for more than 1.5 h."""
+    hrs = sensors.aggregate(crs, 1)
+    if not hrs:
+        return None
+    t0 = hrs[0]["mid"].replace(minute=0)
+    t1 = hrs[-1]["mid"]
+    span = max((t1 - t0).total_seconds() / 3600, 1)
+    temps = [b["t"] for b in hrs if b["t"] is not None] + [limit_c]
+    rhs = [b["h"] for b in hrs if b["h"] is not None]
+    tlo, thi = min(temps) - 0.3, max(temps) + 0.3
+    hlo, hhi = (min(rhs) - 2, max(rhs) + 2) if rhs else (0, 100)
+    dr = Drawing(width, height)
+    x0, y0, pw, ph = 34, 20, width - 68, height - 34
+    X = lambda t: x0 + (t - t0).total_seconds() / 3600 / span * pw
+    YT = lambda v: y0 + (v - tlo) / (thi - tlo) * ph
+    YH = lambda v: y0 + (v - hlo) / max(hhi - hlo, 1e-9) * ph
+    font = dict(fontName="DejaVu", fontSize=7)
+    for a, b in excl:                                    # left-out periods
+        a, b = max(a, t0), min(b, t1)
+        if b > a:
+            dr.add(Rect(X(a), y0, X(b) - X(a), ph, fillColor=LINE, strokeColor=None))
+    for i in range(6):                                   # grid + both axes' labels
+        fy = y0 + ph * i / 5
+        dr.add(Line(x0, fy, x0 + pw, fy, strokeColor=LINE, strokeWidth=0.4))
+        dr.add(String(x0 - 3, fy - 2.5, f"{tlo + (thi - tlo) * i / 5:.1f}", fillColor=RED, textAnchor="end", **font))
+        if rhs:
+            dr.add(String(x0 + pw + 3, fy - 2.5, f"{hlo + (hhi - hlo) * i / 5:.0f}", fillColor=GREEN, **font))
+    days = (t1.date() - t0.date()).days
+    step = 1 if days <= 10 else 7 if days <= 70 else 14
+    d = t0.date() + timedelta(days=1)
+    while d <= t1.date():                                # date ticks at midnight
+        tx = X(datetime.combine(d, datetime.min.time()))
+        if (d - t0.date()).days % step == 0 or step == 1:
+            dr.add(Line(tx, y0, tx, y0 - 2, strokeColor=MUTED, strokeWidth=0.5))
+            dr.add(String(tx, y0 - 9, f"{d:%d %b}", fillColor=MUTED, textAnchor="middle", **font))
+        d += timedelta(days=1)
+    for wd in weigh_days:                                # weigh-ins at 12:00
+        wt = sensors.weigh_in_time(wd)
+        if t0 <= wt <= t1:
+            dr.add(Line(X(wt), y0, X(wt), y0 + ph, strokeColor=MUTED, strokeWidth=0.5, strokeDashArray=[1, 2]))
+    ly = YT(limit_c)
+    dr.add(Line(x0, ly, x0 + pw, ly, strokeColor=RED, strokeWidth=0.7, strokeDashArray=[4, 3]))
+    dr.add(String(x0 + 2, ly + 2, f"{limit_c:g} °C limit", fillColor=RED, **font))
+
+    def lines(field, Y, colour):
+        seg, prev = [], None
+        for b in hrs:
+            v = b[field]
+            if v is None or (prev is not None and (b["mid"] - prev).total_seconds() > 1.5 * 3600):
+                if len(seg) >= 4:
+                    dr.add(PolyLine(seg, strokeColor=colour, strokeWidth=0.8))
+                seg = []
+            if v is not None:
+                seg += [X(b["mid"]), Y(v)]
+                prev = b["mid"]
+        if len(seg) >= 4:
+            dr.add(PolyLine(seg, strokeColor=colour, strokeWidth=0.8))
+    if rhs:
+        lines("h", YH, GREEN)
+    lines("t", YT, RED)
+    dr.add(String(x0, y0 + ph + 5, "Temperature [°C], left, red", fillColor=RED, fontName="DejaVu-Bold", fontSize=7))
+    if rhs:
+        dr.add(String(x0 + pw, y0 + ph + 5, "Humidity [%], right, green", fillColor=GREEN, fontName="DejaVu-Bold",
+                      fontSize=7, textAnchor="end"))
     return dr
 
 
@@ -370,6 +442,17 @@ def build_pdf(con, pid: int) -> bytes:
                                    "covered; – no readings; ⚠ outside the safe range for a "
                                    f"{safety.KINDS[kind or 'fridge'].lower()} (above {safety.TEMP_MAX[kind or 'fridge']:g} °C, "
                                    f"humidity outside {safety.RH_MIN:g}-{safety.RH_MAX:g} %).", S["small"]))
+        if crs:                                # the sensor chart, as in the app (owner, 31 Oct 2026)
+            excl = [(datetime.fromisoformat(e["start_ts"]), datetime.fromisoformat(e["end_ts"]))
+                    for e in db.exclusions(con, p["chamber_id"])]
+            cc = _climate_chart(crs, excl, [_d(r["day"]) for r in rrows], safety.TEMP_MAX[kind or "fridge"])
+            if cc is not None:
+                story.append(KeepTogether([Spacer(1, 6), Paragraph("Temperature and humidity during drying",
+                                                                   S["h3"]), cc,
+                                           Paragraph("Hourly averages. Dashed red line: the "
+                                                     f"{safety.TEMP_MAX[kind or 'fridge']:g} °C limit. Grey: left-out "
+                                                     "periods. Dotted lines: weigh-ins (12:00). Breaks in a line: no "
+                                                     "readings for more than 1.5 h.", S["small"])]))
         if p["chamber_id"]:
             cr = db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"] or today.isoformat())
             temps = [r["temp_c"] for r in cr if r["temp_c"] is not None]
@@ -415,6 +498,24 @@ def build_pdf(con, pid: int) -> bytes:
     if grid is not None:
         story.append(Paragraph("Photos", S["h2"]))
         story.append(grid)
+        # appendix: every photo at full page width, one or two per page (owner, 31 Oct 2026)
+        story.append(PageBreak())
+        story.append(Paragraph("Appendix: photos", S["h2"]))
+        story.append(Paragraph("Each photo at full width. The original files are also attached to this PDF "
+                               "(open the attachments panel of your PDF reader).", S["small"]))
+        for r in allp:
+            f_ = storage.photo_file(r["path"])
+            step = PHOTO_STEP.get(r["stage"], "Other")
+            cap = Paragraph(f"<b>{step}</b> · " + _text(_fd(r["taken_at"]) + (f", {r['caption']}" if r["caption"] else "")),
+                            S["body"])
+            try:
+                from PIL import Image as PImage
+                with PImage.open(f_) as im:
+                    w, h = im.size
+                scale = min(BODY_W / w, (PAGE_H * 0.42) / h)
+                story.append(KeepTogether([Spacer(1, 6), Image(str(f_), width=w * scale, height=h * scale), cap]))
+            except Exception:
+                story.append(KeepTogether([Spacer(1, 6), Paragraph("Photo file missing or unreadable", S["small"]), cap]))
 
     # --- build --------------------------------------------------------------------------- #
     def footer(canvas, doc):
@@ -431,7 +532,27 @@ def build_pdf(con, pid: int) -> bytes:
                             topMargin=MARGIN, bottomMargin=18 * mm,
                             title=f"Bresaola: {db.display_name(p)}", author="Bresaola Tracker")
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
-    return buf.getvalue()
+    return _attach_photos(buf.getvalue(), allp)
+
+
+def _attach_photos(pdf: bytes, rows) -> bytes:
+    """Embed each photo's original file in the PDF as a file attachment (owner, 31 Oct 2026)."""
+    files = [(r, storage.photo_file(r["path"])) for r in rows or []]
+    files = [(r, f) for r, f in files if f.exists()]
+    if not files:
+        return pdf
+    from pypdf import PdfReader, PdfWriter
+    w = PdfWriter(clone_from=PdfReader(io.BytesIO(pdf)))
+    used = set()
+    for r, f in files:
+        name = f"{r['taken_at'][:10]}_{PHOTO_STEP.get(r['stage'], 'Other').replace(' ', '')}_{f.name}"
+        while name in used:
+            name = "_" + name
+        used.add(name)
+        w.add_attachment(name, f.read_bytes())
+    out = io.BytesIO()
+    w.write(out)
+    return out.getvalue()
 
 
 def build_pdf_standalone(pid: int) -> bytes:

@@ -213,7 +213,7 @@ if "photos_shrunk" not in st.session_state:          # one-off tidy-up of photos
 
 with st.sidebar:
     st.title(f"{APP_ICON} Bresaola Tracker")
-    st.caption(f"v{__version__}  \nCredit to Eric Pousson from 2 Guys & A Cooler")
+    st.caption(f"v{__version__}  \nCredit: Eric Pousson / 2 Guys & A Cooler")
 
     projs = db.projects(con)
     labels = {p["id"]: db.display_name(p) for p in projs}
@@ -596,6 +596,12 @@ def photo_menu(r):
         if st.button("Save caption", key=f"phs{k}", width="stretch",
                      disabled=(cap.strip() or None) == (r["caption"] or None)):
             act(db.set_photo_caption, k, cap, success="Caption saved")
+        # the date can be corrected too (owner, 1 Nov 2026), e.g. a photo uploaded days after it was taken
+        old_day = d(r["taken_at"][:10])
+        new_day = st.date_input("Date taken", value=old_day, format="DD/MM/YYYY", max_value=max(db.today(), old_day),
+                                key=fresh(f"phdt{k}", r["taken_at"][:10]))
+        if st.button("Save date", key=f"phds{k}", width="stretch", disabled=new_day == old_day):
+            act(db.set_photo_date, k, new_day, success="Photo date saved")
         st.markdown('<hr class="pop-sep">', unsafe_allow_html=True)
         sure = st.checkbox("Delete this photo for good", key=f"phx{k}")
         if st.button("Delete photo", key=f"phd{k}", width="stretch", disabled=not sure):

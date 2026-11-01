@@ -1,6 +1,7 @@
 # Light and dark theme; the app's "Dark mode" toggle switches between them.
 [theme.light]
 primaryColor = "#7A2320"
+textColor = "#000000"        # black text, also in tables: better contrast (owner, 1 Nov 2026)
 
 [theme.dark]
 primaryColor = "#C4554F"
