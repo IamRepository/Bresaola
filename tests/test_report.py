@@ -60,11 +60,9 @@ def test_photos_included_and_missing_file_tolerated(con):
     t = text(pdf)
     assert "Photos" in t and "rub" in t and "missing or unreadable" in t
     r = PdfReader(io.BytesIO(pdf))
-    assert sum(len(p.images) for p in r.pages) == 2            # the grid, and the appendix at full width
-    assert "Appendix: photos" in t
-    names = list(r.attachments)                                 # original file attached (owner, 31 Oct 2026)
-    assert len(names) == 1 and names[0].startswith("2026-08-15_Day0_")       # the missing file is skipped
-    assert r.attachments[names[0]][0] == storage.photo_file(db.photos(con, 1, "spice")[0]["path"]).read_bytes()
+    assert sum(len(p.images) for p in r.pages) == 1            # once, in its own section; no appendix
+    assert not list(r.attachments) and "Appendix" not in t     # owner, 1 Nov 2026: no full-size copies
+    assert t.index("Recipe: spice mix") < t.index("Photos: Day 0") < t.index("Photos: Cure") < t.index("Notes")
 
 
 def test_climate_chart_in_pdf(con):

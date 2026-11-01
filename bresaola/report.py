@@ -21,7 +21,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table,
+from reportlab.platypus import (Image, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table,
                                 TableStyle)
 
 from . import __version__, calc, db, safety, sensors, storage
@@ -352,6 +352,14 @@ def build_pdf(con, pid: int) -> bytes:
     story.append(_table(tl, [60 * mm, 40 * mm, BODY_W - 100 * mm]))
 
     overflow: list[tuple[str, str]] = []      # long cell texts, printed in full under Notes
+    allp = db.photos(con, pid)
+
+    def photos_for(stages, title):
+        """Each step's photos at the end of its own section (owner, 1 Nov 2026)."""
+        rows = sorted((r for r in allp if r["stage"] in stages), key=lambda r: r["taken_at"])
+        if rows:
+            story.append(Paragraph(title, S["h3"]))
+            story.append(_photo_grid(rows, overflow=overflow))
 
     # --- recipe -------------------------------------------------------------------------- #
     story.append(Paragraph("Recipe: spice mix", S["h2"]))
@@ -374,6 +382,8 @@ def build_pdf(con, pid: int) -> bytes:
                + f", sugar {act_mix.sugar_pct:.1f} %, spices {act_mix.seasoning_pct:.1f} %.")
     story.append(Spacer(1, 3))
     story.append(Paragraph(_text(summary), S["small"]))
+
+    photos_for({"spice"}, "Photos: Day 0")
 
     # --- cure ---------------------------------------------------------------------------- #
     if p["thickness_cm"]:
@@ -399,6 +409,8 @@ def build_pdf(con, pid: int) -> bytes:
                                    S["small"]))
         if w := safety.cure_fridge_warning(p["cure_fridge_c"]):
             story.append(_alert(w))
+
+    photos_for({"cure"}, "Photos: Cure")
 
     # --- drying -------------------------------------------------------------------------- #
     if p["dry_start"] and rs:
@@ -476,13 +488,9 @@ def build_pdf(con, pid: int) -> bytes:
             story.append(Spacer(1, 3))
             story.append(_alert(w))
 
+    photos_for({"dry"}, "Photos: Drying")
+
     # --- notes --------------------------------------------------------------------------- #
-    allp = db.photos(con, pid)
-    grid = None
-    if allp:                                   # built before Notes, so long captions can go there
-        order = {"spice": 0, "cure": 1, "dry": 2, "equalise": 3}
-        allp = sorted(allp, key=lambda r: (order.get(r["stage"], 9), r["taken_at"]))
-        grid = _photo_grid(allp, overflow=overflow)
     notes = [("Day 0", p["spice_note"]), ("Cure", p["cure_note"]), ("Drying", p["dry_note"]),
              ("Final notes", p["final_notes"])]
     notes = [(k, v) for k, v in notes if v and v.strip()] + overflow
@@ -494,28 +502,8 @@ def build_pdf(con, pid: int) -> bytes:
             story += [Paragraph(_text(part), S["body"]) for part in v.split("\n\n")]
             story.append(Spacer(1, 4))
 
-    # --- photos -------------------------------------------------------------------------- #
-    if grid is not None:
-        story.append(Paragraph("Photos", S["h2"]))
-        story.append(grid)
-        # appendix: every photo at full page width, one or two per page (owner, 31 Oct 2026)
-        story.append(PageBreak())
-        story.append(Paragraph("Appendix: photos", S["h2"]))
-        story.append(Paragraph("Each photo at full width. The original files are also attached to this PDF "
-                               "(open the attachments panel of your PDF reader).", S["small"]))
-        for r in allp:
-            f_ = storage.photo_file(r["path"])
-            step = PHOTO_STEP.get(r["stage"], "Other")
-            cap = Paragraph(f"<b>{step}</b> · " + _text(_fd(r["taken_at"]) + (f", {r['caption']}" if r["caption"] else "")),
-                            S["body"])
-            try:
-                from PIL import Image as PImage
-                with PImage.open(f_) as im:
-                    w, h = im.size
-                scale = min(BODY_W / w, (PAGE_H * 0.42) / h)
-                story.append(KeepTogether([Spacer(1, 6), Image(str(f_), width=w * scale, height=h * scale), cap]))
-            except Exception:
-                story.append(KeepTogether([Spacer(1, 6), Paragraph("Photo file missing or unreadable", S["small"]), cap]))
+    # --- finishing photos (equalise, or no step) ------------------------------------------ #
+    photos_for({"equalise", None}, "Photos: Finish")
 
     # --- build --------------------------------------------------------------------------- #
     def footer(canvas, doc):
@@ -532,27 +520,7 @@ def build_pdf(con, pid: int) -> bytes:
                             topMargin=MARGIN, bottomMargin=18 * mm,
                             title=f"Bresaola: {db.display_name(p)}", author="Bresaola Tracker")
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
-    return _attach_photos(buf.getvalue(), allp)
-
-
-def _attach_photos(pdf: bytes, rows) -> bytes:
-    """Embed each photo's original file in the PDF as a file attachment (owner, 31 Oct 2026)."""
-    files = [(r, storage.photo_file(r["path"])) for r in rows or []]
-    files = [(r, f) for r, f in files if f.exists()]
-    if not files:
-        return pdf
-    from pypdf import PdfReader, PdfWriter
-    w = PdfWriter(clone_from=PdfReader(io.BytesIO(pdf)))
-    used = set()
-    for r, f in files:
-        name = f"{r['taken_at'][:10]}_{PHOTO_STEP.get(r['stage'], 'Other').replace(' ', '')}_{f.name}"
-        while name in used:
-            name = "_" + name
-        used.add(name)
-        w.add_attachment(name, f.read_bytes())
-    out = io.BytesIO()
-    w.write(out)
-    return out.getvalue()
+    return buf.getvalue()
 
 
 def build_pdf_standalone(pid: int) -> bytes:

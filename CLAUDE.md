@@ -24,7 +24,7 @@ When a trigger applies, say so and recommend a full audit; the owner decides.
 database; 7 findings (#1 stale tab sending old widget values back = most important), all fixed in 5ca7251 with tests.
 Cost: 239k tokens. Before that: 27 Oct 2026 on v0.4.8 (commit b00fd60): 10 findings (2 High), 1-8 + 10 fixed in v0.4.9, 9 accepted
 (DST hour split across two hub syncs). Cost: 254k tokens, about 2 % of the owner's usage. Before that: 26 Oct 2026 on v0.4.2.
-**Last diff audit:** 1 Nov 2026, d0a1440..23f8c46 (v0.4.23, PDF climate chart + photo appendix/attachments, credit, black text, Name (DD-Mon-YY), photo date): no High/Medium (90k tokens); Lows accepted (corrupt JPEG body could fail the build as before; photos embedded twice). Before that: 29 Oct 2026, e5bcedc..(4 °C line, ~25 lines: dashed limit line + label on the temperature axis,
+**Last diff audit:** 1 Nov 2026, v0.4.24 (PDF: photos per step section, appendix + attachments removed, ~40 lines): reviewed directly with tests, no sub-audit. Before that: 1 Nov 2026, d0a1440..23f8c46 (v0.4.23, PDF climate chart + photo appendix/attachments, credit, black text, Name (DD-Mon-YY), photo date): no High/Medium (90k tokens); Lows accepted (corrupt JPEG body could fail the build as before; photos embedded twice). Before that: 29 Oct 2026, e5bcedc..(4 °C line, ~25 lines: dashed limit line + label on the temperature axis,
 from safety.TEMP_MAX by chamber type): reviewed directly with test + browser check, no sub-audit. Before that:
 29 Oct 2026, 20168cf..e51d886 (v0.4.22, one chart with two y-axes + period slider, demo readings
 in test mode): no High; 1 suspected Medium (empty period drew an empty chart) fixed after with test; Low key
