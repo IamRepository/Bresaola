@@ -21,8 +21,9 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import (Image, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table,
-                                TableStyle)
+from reportlab.pdfgen import canvas as rl_canvas
+from reportlab.platypus import (HRFlowable, Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate,
+                                Spacer, Table, TableStyle)
 
 from . import __version__, calc, db, safety, sensors, storage
 
@@ -35,7 +36,8 @@ RED = colors.HexColor("#7a2320")
 INK = colors.HexColor("#2e2a28")
 MUTED = colors.HexColor("#7d7672")
 LINE = colors.HexColor("#e3dedb")
-SOFT = colors.HexColor("#f6f3f1")
+SOFT = colors.HexColor("#f8f5f3")
+HEAD_BG = colors.HexColor("#efe5e2")
 GREEN = colors.HexColor("#3d5a45")
 
 PAGE_W, PAGE_H = A4
@@ -45,15 +47,34 @@ BODY_W = PAGE_W - 2 * MARGIN
 S = {
     "title": ParagraphStyle("title", fontName="DejaVu-Bold", fontSize=19, leading=23, textColor=INK),
     "sub": ParagraphStyle("sub", fontName="DejaVu", fontSize=9, leading=12, textColor=MUTED),
-    "h2": ParagraphStyle("h2", fontName="DejaVu-Bold", fontSize=11.5, leading=15, textColor=RED,
-                         spaceBefore=10, spaceAfter=4, keepWithNext=1),    # never alone at a page end
+    "h2": ParagraphStyle("h2", fontName="DejaVu-Bold", fontSize=12.5, leading=16, textColor=RED,
+                         spaceBefore=12, spaceAfter=1, keepWithNext=1),    # never alone at a page end
+    "kicker": ParagraphStyle("kicker", fontName="DejaVu-Bold", fontSize=7.5, leading=10, textColor=RED),
+    "head": ParagraphStyle("head", fontName="DejaVu-Bold", fontSize=8, leading=10, textColor=INK),
     "body": ParagraphStyle("body", fontName="DejaVu", fontSize=9, leading=12.5, textColor=INK),
     "small": ParagraphStyle("small", fontName="DejaVu", fontSize=7.5, leading=10, textColor=MUTED),
     "lab": ParagraphStyle("lab", fontName="DejaVu", fontSize=7.5, leading=9.5, textColor=MUTED),
     "val": ParagraphStyle("val", fontName="DejaVu-Bold", fontSize=13, leading=16, textColor=INK),
-    "h3": ParagraphStyle("h3", fontName="DejaVu-Bold", fontSize=9.5, leading=12, textColor=INK, keepWithNext=1),
+    "h3": ParagraphStyle("h3", fontName="DejaVu-Bold", fontSize=9.5, leading=12, textColor=INK, keepWithNext=1,
+                         spaceBefore=6, spaceAfter=2),
     "cell": ParagraphStyle("cell", fontName="DejaVu", fontSize=8, leading=10, textColor=INK, alignment=TA_LEFT),
 }
+
+
+def _h2(num: int, title: str) -> list:
+    """Numbered section heading with a rule under it (kept with what follows)."""
+    rule = HRFlowable(width="100%", thickness=0.8, color=RED, spaceBefore=1, spaceAfter=6)
+    rule.keepWithNext = 1
+    return [Paragraph(f"{num}&nbsp;&nbsp;{_text(title)}", S["h2"]), rule]
+
+
+def _notes(label: str, text: str | None) -> list:
+    """A step's own notes, inside that step's section (owner, 1 Nov 2026)."""
+    if not text or not text.strip():
+        return []
+    out = [Paragraph(_text(label), S["h3"])]
+    out += [Paragraph(_text(part), S["body"]) for part in text.split("\n\n")]
+    return out + [Spacer(1, 4)]
 
 
 def _d(s):
@@ -79,19 +100,18 @@ CELL_LINES = 6          # line breaks in a table cell
 def _cell_text(s: str | None, label: str, overflow: list) -> str:
     """Table cells can't split across pages: a note longer than a page made reportlab give up
     (LayoutError) and the download did nothing (audit 26 Oct, #3). Shorten long cell text and keep
-    the full text for the Notes section."""
+    the full text, printed at the end of the same section."""
     s = s or ""
     if len(s) <= CELL_MAX and s.count("\n") < CELL_LINES:
         return s
     overflow.append((label, s))
     short = " ".join(s[:CELL_MAX].split())                  # line breaks folded into spaces
     short = short.rsplit(" ", 1)[0] if " " in short else short
-    return short + " … (full text under Notes)"
+    return short + " … (full text below)"
 
 
 def _table(rows, widths, header=True, align_right=()):
     data = [[c if isinstance(c, Paragraph) else Paragraph(_text(str(c)), S["cell"]) for c in r] for r in rows]
-    t = Table(data, colWidths=widths, repeatRows=1 if header else 0)
     style = [
         ("FONTNAME", (0, 0), (-1, -1), "DejaVu"),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -102,9 +122,13 @@ def _table(rows, widths, header=True, align_right=()):
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
     ]
     if header:
-        style += [("BACKGROUND", (0, 0), (-1, 0), SOFT), ("LINEBELOW", (0, 0), (-1, 0), 0.8, MUTED)]
+        data[0] = [Paragraph(c.text, ParagraphStyle("hd", parent=S["head"], alignment=c.style.alignment))
+                   if isinstance(c, Paragraph) else c for c in data[0]]
+        style += [("BACKGROUND", (0, 0), (-1, 0), HEAD_BG), ("LINEBELOW", (0, 0), (-1, 0), 0.8, RED),
+                  ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, SOFT])]
     for col in align_right:
         style.append(("ALIGN", (col, 0), (col, -1), "RIGHT"))
+    t = Table(data, colWidths=widths, repeatRows=1 if header else 0)
     t.setStyle(TableStyle(style))
     return t
 
@@ -119,11 +143,18 @@ WARN = colors.HexColor("#8a5a00")
 WARN_BG = colors.HexColor("#fbf1dc")
 
 
-def _alert(text: str):
-    """Amber box for safety warnings."""
-    t = Table([[Paragraph("<b>Warning:</b> " + _text(text), ParagraphStyle("w", parent=S["body"], textColor=WARN))]],
-              colWidths=[BODY_W])
-    t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), WARN_BG), ("BOX", (0, 0), (-1, -1), 0.6, WARN),
+NOTE = colors.HexColor("#2f5d7c")
+NOTE_BG = colors.HexColor("#eaf2f7")
+
+
+def _alert(text: str, level: str = "warning"):
+    """One box style for safety messages: the level in a narrow left column, the text beside it."""
+    fg, bg, label = (WARN, WARN_BG, "Warning") if level == "warning" else (NOTE, NOTE_BG, "Note")
+    t = Table([[Paragraph(f"<b>{label}</b>", ParagraphStyle("al", parent=S["body"], textColor=fg)),
+                Paragraph(_text(text), ParagraphStyle("at", parent=S["body"], textColor=INK))]],
+              colWidths=[20 * mm, BODY_W - 20 * mm])
+    t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), bg), ("LINEBEFORE", (0, 0), (0, -1), 3, fg),
+                           ("VALIGN", (0, 0), (-1, -1), "TOP"),
                            ("LEFTPADDING", (0, 0), (-1, -1), 7), ("TOPPADDING", (0, 0), (-1, -1), 5),
                            ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
     return t
@@ -169,7 +200,7 @@ def _chart(rs, start_day: date, target_g: float, width=BODY_W, height=62 * mm):
     lp.xValueAxis.valueMin, lp.xValueAxis.valueMax = 0, xmax
     lp.xValueAxis.labels.fontName = lp.yValueAxis.labels.fontName = "DejaVu"
     lp.xValueAxis.labels.fontSize = lp.yValueAxis.labels.fontSize = 7
-    lp.xValueAxis.labelTextFormat = lambda v: f"day {v:.0f}"
+    lp.xValueAxis.labelTextFormat = lambda v: f"{start_day + timedelta(days=round(v)):%d %b}"
     lp.xValueAxis.strokeColor = lp.yValueAxis.strokeColor = MUTED
     lp.yValueAxis.valueMin, lp.yValueAxis.valueMax = lo, hi
     lp.yValueAxis.labelTextFormat = lambda v: f"{v:.0f} g"
@@ -180,6 +211,8 @@ def _chart(rs, start_day: date, target_g: float, width=BODY_W, height=62 * mm):
     dr.add(Line(lp.x, ty, lp.x + lp.width, ty, strokeColor=INK, strokeWidth=0.8, strokeDashArray=[4, 3]))
     dr.add(String(lp.x + lp.width - 2, ty + 3, f"target {target_g:.0f} g", fontName="DejaVu",
                   fontSize=7, fillColor=INK, textAnchor="end"))
+    dr.add(String(lp.x, lp.y + lp.height + 4, "Weight incl. wrap + net [g], red; dashed: target", fontName="DejaVu-Bold",
+                  fontSize=7, fillColor=RED))
     return dr
 
 
@@ -256,6 +289,25 @@ def _climate_chart(crs, excl, weigh_days, limit_c, width=BODY_W, height=70 * mm)
 PHOTO_STEP = {"spice": "Day 0", "cure": "Cure", "dry": "Drying", "equalise": "Equalise"}
 
 
+def _photo_4x3(path, width):
+    """The photo cropped to 4:3 around its centre, so every photo in a grid has the same size."""
+    from PIL import Image as PImage, ImageOps
+    with PImage.open(path) as im:
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        w, h = im.size
+        if w / h > 4 / 3:
+            nw = int(h * 4 / 3)
+            im = im.crop(((w - nw) // 2, 0, (w - nw) // 2 + nw, h))
+        else:
+            nh = int(w * 3 / 4)
+            im = im.crop((0, (h - nh) // 2, w, (h - nh) // 2 + nh))
+        im.thumbnail((900, 675))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=85)
+    buf.seek(0)
+    return Image(buf, width=width, height=width * 3 / 4)
+
+
 def _photo_grid(rows, cols=3, overflow=None):
     overflow = [] if overflow is None else overflow
     cell_w = BODY_W / cols - 4
@@ -267,11 +319,7 @@ def _photo_grid(rows, cols=3, overflow=None):
         cap = Paragraph(f"<b>{step}</b> · " + _text(_fd(r["taken_at"]) + (f", {caption}" if caption else "")),
                         S["small"])
         try:
-            from PIL import Image as PImage
-            with PImage.open(f) as im:
-                w, h = im.size
-            scale = min(cell_w / w, (cell_w * 0.8) / h)
-            cells.append([Image(str(f), width=w * scale, height=h * scale), cap])
+            cells.append([_photo_4x3(f, cell_w - 4), cap])
         except Exception:                      # missing or unreadable: say so, don't fail the report
             cells.append([Paragraph("Photo file missing or unreadable", S["small"]), cap])
     for i in range(0, len(cells), cols):
@@ -294,21 +342,35 @@ def build_pdf(con, pid: int) -> bytes:
     story = []
 
     # --- title --------------------------------------------------------------------------- #
-    story.append(Paragraph(_text(db.display_name(p)), S["title"]))
-    status = f"Closed {_fd(p['closed_at'])}" if closed else f"In progress: summary so far, {_fd(today)}"
-    facts = [p["blend"], f"{p['green_weight_g']:.0f} g raw meat after trimming",
-             "EcoCure #2" if p["ecocure"] else "no EcoCure", status]
-    story.append(Paragraph(_text(" · ".join(facts)), S["sub"]))
-    story.append(Spacer(1, 6))
     kind = db.chamber_kind(con, p)
+    status = f"Closed {_fd(p['closed_at'])}" if closed else f"In progress: summary so far, {_fd(today)}"
+    sensor = None
+    if p["chamber_id"]:
+        sensor = con.execute("SELECT tapo_name FROM chamber WHERE id=?", (p["chamber_id"],)).fetchone()[0]
+    story.append(Paragraph("BRESAOLA TRACKER · BATCH REPORT", S["kicker"]))
+    story.append(Spacer(1, 2))
+    story.append(Paragraph(_text(db.display_name(p)), S["title"]))
+    story.append(HRFlowable(width="100%", thickness=1.4, color=RED, spaceBefore=4, spaceAfter=6))
+    facts = [("Blend", p["blend"]), ("Raw meat after trimming", f"{p['green_weight_g']:.0f} g"),
+             ("Curing salt", "EcoCure #2" if p["ecocure"] else "none"), ("Day 0", _fd(p["start_date"])),
+             ("Drying place", safety.KINDS[kind].lower() if kind else "–"), ("Sensor", sensor or "–"),
+             ("Status", status), ("Report", f"generated {_fd(today)}, app v{__version__}")]
+    lab = ParagraphStyle("fl", parent=S["lab"])
+    cells = [[Paragraph(_text(a), lab), Paragraph(_text(b), S["cell"])] for a, b in facts]
+    grid = [cells[i] + cells[i + 1] for i in range(0, len(cells), 2)]
+    ft = Table(grid, colWidths=[32 * mm, BODY_W / 2 - 32 * mm, 32 * mm, BODY_W / 2 - 32 * mm])
+    ft.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 1.5),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 1.5), ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
+    story += [ft, Spacer(1, 8)]
     if not p["ecocure"]:
         dry_rows = (db.chamber_readings(con, p["chamber_id"], p["dry_start"], p["dry_end"])
                     if p["chamber_id"] and p["dry_start"] else [])
         level, text = safety.no_cure_message(kind, dry_rows)
-        story.append(_alert(text) if level == "warning" else Paragraph(_text(text), S["small"]))
+        story.append(_alert(text, level))
     story.append(Spacer(1, 4))
 
-    # --- result -------------------------------------------------------------------------- #
+    # --- 1 result ------------------------------------------------------------------------ #
+    story += _h2(1, "Result")
     tare = p["tare_g"] or 0
     cure_days = (_d(p["cure_end_actual"]) - _d(p["cure_start"])).days \
         if p["cure_end_actual"] and p["cure_start"] else None
@@ -336,7 +398,7 @@ def build_pdf(con, pid: int) -> bytes:
         story.append(Paragraph("Drying has not started yet, so there is no result.", S["body"]))
 
     # --- timeline ------------------------------------------------------------------------ #
-    story.append(Paragraph("Timeline", S["h2"]))
+    story += _h2(2, "Timeline")
     planned = _d(p["cure_end_planned"])
     tl = [["Step", "Date", "Detail"],
           ["Day 0: trimmed, spiced", _fd(p["start_date"]), ""],
@@ -351,7 +413,15 @@ def build_pdf(con, pid: int) -> bytes:
         tl.append(["Closed", _fd(p["closed_at"]), ""])
     story.append(_table(tl, [60 * mm, 40 * mm, BODY_W - 100 * mm]))
 
-    overflow: list[tuple[str, str]] = []      # long cell texts, printed in full under Notes
+    overflow: list[tuple[str, str]] = []      # long cell texts, printed in full at the end of their section
+
+    def full_texts():
+        """Long table texts of this section, in full (they can't split across pages inside a cell)."""
+        for k, v in overflow:
+            story.append(Paragraph(f"<b>{_text(k)}</b>", ParagraphStyle("nh", parent=S["body"], keepWithNext=1)))
+            story.extend(Paragraph(_text(part), S["body"]) for part in v.split("\n\n"))
+            story.append(Spacer(1, 4))
+        overflow.clear()
     allp = db.photos(con, pid)
 
     def photos_for(stages, title):
@@ -362,7 +432,7 @@ def build_pdf(con, pid: int) -> bytes:
             story.append(_photo_grid(rows, overflow=overflow))
 
     # --- recipe -------------------------------------------------------------------------- #
-    story.append(Paragraph("Recipe: spice mix", S["h2"]))
+    story += _h2(3, "Day 0: recipe and spice mix")
     rows = [["Ingredient", "Rate", "Plan", "Actual", "Note"]]
     for l in lines:
         pct = l["unit"] == "pct"
@@ -383,11 +453,13 @@ def build_pdf(con, pid: int) -> bytes:
     story.append(Spacer(1, 3))
     story.append(Paragraph(_text(summary), S["small"]))
 
+    story += _notes("Notes: Day 0", p["spice_note"])
     photos_for({"spice"}, "Photos: Day 0")
+    full_texts()
 
     # --- cure ---------------------------------------------------------------------------- #
     if p["thickness_cm"]:
-        story.append(Paragraph("Cure", S["h2"]))
+        story += _h2(4, "Cure")
         est = " (estimate)" if p["thickness_estimated"] else ""
         mins = calc.cure_days_minimum(p["thickness_cm"], p["shape"])
         story.append(Paragraph(_text(
@@ -410,12 +482,16 @@ def build_pdf(con, pid: int) -> bytes:
         if w := safety.cure_fridge_warning(p["cure_fridge_c"]):
             story.append(_alert(w))
 
+    if p["thickness_cm"]:
+        story += _notes("Notes: Cure", p["cure_note"])
     photos_for({"cure"}, "Photos: Cure")
+    full_texts()
 
     # --- drying -------------------------------------------------------------------------- #
     if p["dry_start"] and rs:
         s = db.drying_status(con, pid)
-        head = [Paragraph("Drying", S["h2"])]
+        story.append(PageBreak())
+        head = _h2(5, "Drying")
         ch = con.execute("SELECT name, tapo_name FROM chamber WHERE id=?", (p["chamber_id"],)).fetchone() \
             if p["chamber_id"] else None
         head.append(Paragraph(_text(
@@ -488,38 +564,55 @@ def build_pdf(con, pid: int) -> bytes:
             story.append(Spacer(1, 3))
             story.append(_alert(w))
 
+    if p["dry_start"] and rs:
+        story += _notes("Notes: Drying", p["dry_note"])
     photos_for({"dry"}, "Photos: Drying")
+    full_texts()
 
-    # --- notes --------------------------------------------------------------------------- #
-    notes = [("Day 0", p["spice_note"]), ("Cure", p["cure_note"]), ("Drying", p["dry_note"]),
-             ("Final notes", p["final_notes"])]
-    notes = [(k, v) for k, v in notes if v and v.strip()] + overflow
-    if notes:
-        story.append(Paragraph("Notes", S["h2"]))
-        for k, v in notes:
-            # heading kept with the start of the note; the note itself may run over pages
-            story.append(Paragraph(f"<b>{_text(k)}</b>", ParagraphStyle("nh", parent=S["body"], keepWithNext=1)))
-            story += [Paragraph(_text(part), S["body"]) for part in v.split("\n\n")]
-            story.append(Spacer(1, 4))
-
-    # --- finishing photos (equalise, or no step) ------------------------------------------ #
-    photos_for({"equalise", None}, "Photos: Finish")
+    # --- 6 finish: final notes and photos without a step ------------------------------------ #
+    fin = [r for r in allp if r["stage"] in ("equalise", None)]
+    if (p["final_notes"] or "").strip() or fin:
+        story += _h2(6, "Finish")
+        story += _notes("Final notes", p["final_notes"])
+        photos_for({"equalise", None}, "Photos: Finish")
+        full_texts()
 
     # --- build --------------------------------------------------------------------------- #
-    def footer(canvas, doc):
-        canvas.saveState()
-        canvas.setFont("DejaVu", 7)
-        canvas.setFillColor(MUTED)
-        canvas.drawString(MARGIN, 10 * mm, f"Bresaola Tracker v{__version__} · {db.display_name(p)} · "
-                                           f"generated {_fd(today)}")
-        canvas.drawRightString(PAGE_W - MARGIN, 10 * mm, f"page {doc.page}")
-        canvas.restoreState()
+    name = db.display_name(p)
+
+    class PagedCanvas(rl_canvas.Canvas):
+        """Header from page 2, footer with 'page x of y' (needs all pages first: drawn at save)."""
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self._pages = []
+
+        def showPage(self):
+            self._pages.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total = len(self._pages)
+            for state in self._pages:
+                self.__dict__.update(state)
+                self.saveState()
+                self.setFont("DejaVu", 7)
+                self.setFillColor(MUTED)
+                self.setStrokeColor(LINE)
+                if self._pageNumber > 1:
+                    self.drawString(MARGIN, PAGE_H - 10 * mm, f"Batch report · {name}")
+                    self.line(MARGIN, PAGE_H - 11.5 * mm, PAGE_W - MARGIN, PAGE_H - 11.5 * mm)
+                self.line(MARGIN, 13 * mm, PAGE_W - MARGIN, 13 * mm)
+                self.drawString(MARGIN, 9 * mm, f"Bresaola Tracker v{__version__} · {name} · generated {_fd(today)}")
+                self.drawRightString(PAGE_W - MARGIN, 9 * mm, f"page {self._pageNumber} of {total}")
+                self.restoreState()
+                super().showPage()
+            super().save()
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN,
-                            topMargin=MARGIN, bottomMargin=18 * mm,
-                            title=f"Bresaola: {db.display_name(p)}", author="Bresaola Tracker")
-    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+                            topMargin=MARGIN + 2 * mm, bottomMargin=18 * mm,
+                            title=f"Bresaola: {name}", author="Bresaola Tracker")
+    doc.build(story, canvasmaker=PagedCanvas)
     return buf.getvalue()
 
 

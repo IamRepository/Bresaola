@@ -84,7 +84,7 @@ def test_pdf_with_very_long_texts(env):
         env.execute("UPDATE project SET dry_note=? WHERE id=1", (long * 3,))
     pdf = report.build_pdf(env, 1)
     t = " ".join(" ".join(pg.extract_text() for pg in PdfReader(io.BytesIO(pdf)).pages).split())
-    assert "full text under Notes" in t
+    assert "full text below" in t
     assert "Weigh-in note" in t and "Ingredient note" in t and "Photo caption" in t
     assert "line 79" in t
 

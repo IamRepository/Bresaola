@@ -25,7 +25,7 @@ def con(tmp_path, monkeypatch):
 
 
 def text(pdf: bytes) -> str:
-    return " ".join(page.extract_text() for page in PdfReader(io.BytesIO(pdf)).pages)
+    return " ".join(" ".join(page.extract_text().replace("\xa0", " ").split()) for page in PdfReader(io.BytesIO(pdf)).pages)
 
 
 def jpeg():
@@ -62,7 +62,7 @@ def test_photos_included_and_missing_file_tolerated(con):
     r = PdfReader(io.BytesIO(pdf))
     assert sum(len(p.images) for p in r.pages) == 1            # once, in its own section; no appendix
     assert not list(r.attachments) and "Appendix" not in t     # owner, 1 Nov 2026: no full-size copies
-    assert t.index("Recipe: spice mix") < t.index("Photos: Day 0") < t.index("Photos: Cure") < t.index("Notes")
+    assert t.index("3 Day 0: recipe and spice mix") < t.index("Photos: Day 0") < t.index("4 Cure") < t.index("Photos: Cure") < t.index("5 Drying")
 
 
 def test_climate_chart_in_pdf(con):
@@ -85,7 +85,7 @@ def test_no_climate_chart_without_readings(con):
 def test_new_project_without_any_data(con):
     pid = db.create_project(con, "Fresh", "Classic Italian", False, 1500, start_date=TODAY)
     t = text(report.build_pdf(con, pid))
-    assert "Drying has not started yet" in t and "Recipe" in t
+    assert "Drying has not started yet" in t and "recipe and spice mix" in t
 
 
 def test_file_name_is_safe(con):
@@ -110,3 +110,20 @@ def test_pdf_can_be_built_from_another_thread(con):
     with ThreadPoolExecutor(1) as ex:
         pdf = ex.submit(report.build_pdf_standalone, 1).result()
     assert pdf.startswith(b"%PDF")
+
+
+def test_professional_layout(con):
+    """Owner, 1 Nov 2026: title block, numbered sections, each step's notes in its own section,
+    running header, 'page x of y'."""
+    with con:
+        db.set_dry_note(con, 1, "turned the piece")
+    pdf = report.build_pdf(con, 1)
+    t = text(pdf)
+    pages = PdfReader(io.BytesIO(pdf)).pages
+    assert "BRESAOLA TRACKER · BATCH REPORT" in t and "Drying place" in t and "Sensor" in t
+    for i, h in enumerate(["1 Result", "2 Timeline", "3 Day 0", "4 Cure", "5 Drying"]):
+        assert h in t, h
+    assert t.index("5 Drying") < t.index("Notes: Drying") < t.index("turned the piece")
+    assert t.index("4 Cure") < t.index("Notes: Cure") < t.index("5 Drying")
+    assert f"page 1 of {len(pages)}" in pages[0].extract_text()
+    assert "Batch report · Palermo Spicy" in pages[1].extract_text()

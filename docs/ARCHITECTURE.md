@@ -133,7 +133,7 @@ can be used and tested without a UI.
 | `bresaola/safety.py` | 143 | Food-safety limits and the messages built from them | `sensors` (lazy import, for hourly averages) |
 | `bresaola/sensors.py` | 387 | Parsing Tapo export files, importing readings, left-out periods, gaps, averages | `db` |
 | `bresaola/tapo_sync.py` | 247 | Hub sync: discovery, login, fetching, storing, logging; also a command-line entry point | `db`, `sensors`, `tapo` (optional) |
-| `bresaola/report.py` | ~560 | The PDF report (ReportLab, bundled DejaVu fonts): sections, weight chart, temperature/humidity chart, photos at the end of each step's section (Day 0, Cure, Drying, Finish) | `db`, `calc`, `safety`, `sensors`, `storage` |
+| `bresaola/report.py` | ~560 | The PDF report (ReportLab, bundled DejaVu fonts): title block with key facts; numbered sections 1 Result, 2 Timeline, 3 Day 0, 4 Cure, 5 Drying (new page), 6 Finish, each step with its own notes, photos (4:3 grid) and full texts of long table cells; weight and temperature/humidity charts; running header and 'page x of y' footer | `db`, `calc`, `safety`, `sensors`, `storage` |
 | `bresaola/storage.py` | 226 | Where data lives, test/persistent mode, photo files, backup and restore zip | — |
 | `bresaola/blends.py` | 43 | The blend table and the salt/EcoCure rates | — |
 | `bresaola/stages.py` | 19 | Stage states for the step rail | — |
