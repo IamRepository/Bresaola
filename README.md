@@ -100,3 +100,7 @@ Credentials stay in the environment of your own machine; they are never stored i
   - Vacuum-seal, weigh again → **weight in vacuum bag [g]**
   - Derived: wrap + net = last drying weigh-in − weight unwrapped (gives the real packaging weight, so the final loss % can be corrected); bag = in-bag − unwrapped
   - Open: weigh again when taken out of the bag at the end (final meat weight)?
+
+## Licence
+
+Copyright © 2026 Imran Abdul-Majid. All rights reserved. No licence is granted to copy, change, distribute or use this code; see [LICENSE](LICENSE).
